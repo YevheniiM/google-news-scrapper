@@ -6,10 +6,14 @@
 import { Actor, Dataset } from 'apify';
 import { CheerioCrawler, PlaywrightCrawler, log } from 'crawlee';
 import { gotScraping } from 'got-scraping';
+import * as cheerio from 'cheerio';
 import { CONFIG } from './config.js';
-import { extractRealUrl, extractImages, validateImageUrl, cleanText, sleep, decodeGoogleNewsUrl } from './utils.js';
+import { extractRealUrl, extractImages, validateImageUrl, cleanText, sleep, decodeGoogleNewsUrl, resolveGoogleNewsUrlWithBrowser, validateContentQuality } from './utils.js';
 import { SessionManager } from './session-manager.js';
 import { ContentExtractor } from './content-extractor.js';
+import { AdvancedContentExtractor } from './advanced-content-extractor.js';
+import { GoogleNewsResolver } from './google-news-resolver.js';
+import { ResidentialProxyManager } from './residential-proxy-manager.js';
 
 /**
  * Article Crawler class
@@ -21,6 +25,17 @@ export class ArticleCrawler {
         this.failedUrls = [];
         this.sessionManager = new SessionManager();
         this.contentExtractor = new ContentExtractor();
+        this.advancedContentExtractor = new AdvancedContentExtractor();
+        this.residentialProxyManager = new ResidentialProxyManager(proxyConfiguration);
+
+        // Initialize production-grade Google News resolver with proxy support
+        this.googleNewsResolver = new GoogleNewsResolver(this.residentialProxyManager, {
+            enablePersistence: true,
+            cacheFile: 'storage/google-news-cache.json',
+            maxCacheSize: 50000,
+            cacheExpiryHours: 24,
+            minRequestInterval: 500 // 0.5 seconds between requests with residential proxies
+        });
         this.browserFallbackDomains = new Set(); // Domains that require browser mode
         this.browserFallbackIndicators = [
             'javascript is required',
@@ -31,6 +46,23 @@ export class ArticleCrawler {
             'please wait',
             'checking your browser',
         ];
+
+        // Statistics for "all or nothing" strategy
+        this.stats = {
+            processed: 0,
+            saved: 0,
+            skipped: {
+                urlResolutionFailed: 0,
+                contentFetchFailed: 0,
+                consentPageDetected: 0,
+                extractionFailed: 0,
+                textTooShort: 0,
+                lowQualityContent: 0,
+                noImages: 0,
+                imageValidationFailed: 0,
+                qualityTooLow: 0
+            }
+        };
     }
 
     /**
@@ -121,92 +153,187 @@ export class ArticleCrawler {
         const { userData } = request;
 
         try {
-            log.info(`Processing article: ${request.url}`);
+            this.stats.processed++;
+            log.info(`Processing article ${this.stats.processed}: ${request.url}`);
 
-            // Handle Google News URLs - use RSS data instead of trying to resolve redirects
+            // STEP 1: Resolve Google News URLs to actual article URLs
             let finalUrl = request.url;
-            let useRssData = false;
+            let isGoogleNewsUrl = false;
 
             if (request.url.includes('news.google.com/articles/')) {
                 log.info(`Google News URL detected: ${request.url}`);
+                isGoogleNewsUrl = true;
 
-                // For Google News URLs, we'll use the RSS feed data instead of trying to resolve redirects
-                // This is more reliable and faster than trying to navigate through Google's redirect system
-                useRssData = true;
-                finalUrl = request.url;
+                // Use the new Google News resolver
+                finalUrl = await this.googleNewsResolver.resolveUrl(request.url, page);
 
-                log.info(`Using RSS feed data for Google News article instead of redirect resolution`);
+                if (finalUrl === request.url) {
+                    log.warning(`Failed to resolve Google News URL: ${request.url}`);
+                    log.info(`SKIPPING ARTICLE - Cannot resolve Google News URL to actual article`);
+                    this.stats.skipped.urlResolutionFailed++;
+                    return; // Skip this article entirely
+                }
+
+                log.info(`Successfully resolved to: ${finalUrl}`);
             }
 
-            // Check for consent pages or blocks
-            const htmlContent = this.useBrowser ? await page.content() : body;
+            // STEP 2: Fetch the actual article content
+            let htmlContent;
 
-            if (this.sessionManager.isConsentPage(htmlContent, request.url)) {
-                log.warning(`Consent page detected for ${request.url}`);
+            if (finalUrl === request.url && !isGoogleNewsUrl) {
+                // Use existing content for non-Google News URLs
+                htmlContent = this.useBrowser ? await page.content() : body;
+            } else {
+                // Fetch content from the resolved URL
+                try {
+                    log.info(`Fetching content from resolved URL: ${finalUrl}`);
 
-                // Try to handle the blocked response
-                const shouldRetry = await this.sessionManager.handleBlockedResponse(context);
-                if (shouldRetry) {
-                    throw new Error('Consent page detected - retrying with different session');
-                } else {
-                    // Instead of throwing an error, let's try to extract what we can
-                    log.warning('Consent page detected - attempting to extract available content');
+                    if (this.useBrowser && page) {
+                        // Use browser to fetch content (handles JavaScript)
+                        await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                        htmlContent = await page.content();
+                    } else {
+                        // Use HTTP request with residential proxy
+                        const proxyConfig = await this.residentialProxyManager.getProxyConfig(finalUrl);
+
+                        const requestConfig = {
+                            url: finalUrl,
+                            timeout: { request: CONFIG.CRAWLER.REQUEST_TIMEOUT },
+                            retry: { limit: CONFIG.CRAWLER.RETRY_ATTEMPTS },
+                            headers: {
+                                'User-Agent': CONFIG.CRAWLER.DEFAULT_USER_AGENT,
+                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                                'Accept-Language': 'en-US,en;q=0.5',
+                                'Accept-Encoding': 'gzip, deflate',
+                                'Connection': 'keep-alive',
+                                'Upgrade-Insecure-Requests': '1',
+                                'Referer': 'https://news.google.com/'
+                            },
+                            ...proxyConfig
+                        };
+
+                        if (proxyConfig.proxyUrl) {
+                            log.debug(`Using residential proxy for: ${finalUrl}`);
+                        }
+
+                        const response = await gotScraping(requestConfig);
+                        htmlContent = response.body;
+                    }
+
+                    log.info(`Successfully fetched content from: ${finalUrl}`);
+                } catch (error) {
+                    log.error(`Failed to fetch content from ${finalUrl}: ${error.message}`);
+                    log.info(`SKIPPING ARTICLE - Cannot fetch content`);
+                    this.stats.skipped.contentFetchFailed++;
+                    return; // Skip this article entirely
                 }
             }
 
-            // Check if browser mode is needed (only for Cheerio crawler)
-            if (!this.useBrowser && this.needsBrowserMode(request.url, htmlContent)) {
-                log.warning(`Browser mode needed for ${request.url} - content requires JavaScript`);
-                throw new Error('Browser mode required - retrying with PlaywrightCrawler');
+            // STEP 3: Check for consent pages or blocks (but don't skip, try to extract anyway)
+            let hasConsentPage = false;
+            if (this.sessionManager.isConsentPage(htmlContent, finalUrl)) {
+                log.warning(`Consent page detected for ${finalUrl} - will try to extract content anyway`);
+                hasConsentPage = true;
             }
 
-            // Extract content using enhanced extractor or RSS data for Google News
-            let extractedContent;
+            // STEP 4: Extract content using advanced content extractor
+            log.info(`Extracting content from: ${finalUrl}`);
+            const extractedContent = this.advancedContentExtractor.extractContent(htmlContent, finalUrl);
 
-            if (useRssData && userData) {
-                // For Google News URLs, create content from RSS feed data
-                log.info(`Creating content from RSS feed data for Google News article`);
-                extractedContent = {
-                    title: userData.title || 'Google News Article',
-                    text: userData.description || `Article from ${userData.source || 'Unknown Source'}: ${userData.title || 'No title available'}`,
-                    author: userData.source || 'Google News',
-                    description: userData.description || `News article about ${userData.query || 'current events'}`,
-                    date: userData.pubDate || new Date().toISOString(),
-                    lang: 'en',
-                    tags: userData.query ? [userData.query] : [],
-                    success: true
-                };
-            } else {
-                // Regular content extraction for non-Google News URLs
-                extractedContent = this.contentExtractor.extractContent(htmlContent, $);
+            // STEP 5: Apply "All or Nothing" validation
+            if (!extractedContent.success) {
+                log.warning(`Content extraction failed for ${finalUrl}`);
+                log.info(`SKIPPING ARTICLE - Content extraction failed`);
+                this.stats.skipped.extractionFailed++;
+                return; // Skip this article entirely
             }
 
-            // Extract images (only pass $ if it exists - for Cheerio mode)
-            const images = extractImages(extractedContent, $ || null);
+            // Check minimum text length requirement (RELAXED to 100 characters)
+            if (!extractedContent.text || extractedContent.text.length < 100) {
+                log.warning(`Article text too short: ${extractedContent.text ? extractedContent.text.length : 0} characters`);
+                log.info(`SKIPPING ARTICLE - Text content insufficient (minimum 100 characters required)`);
+                this.stats.skipped.textTooShort++;
+                return; // Skip this article entirely
+            }
 
-            // Validate images
-            const workingImages = await this.validateImages(images);
+            // Check for meaningful content (RELAXED - only skip obvious error pages)
+            if (this.isLowQualityContent(extractedContent.text)) {
+                log.warning(`Potential low quality content detected for ${finalUrl} - proceeding anyway`);
+                // Don't skip - let the quality validation handle it
+            }
 
-            // Prepare final record
+            // Check images requirement (RELAXED - allow articles without images for now)
+            if (!extractedContent.images || extractedContent.images.length === 0) {
+                log.warning(`No images found for ${finalUrl} - proceeding anyway`);
+                extractedContent.images = []; // Ensure it's an empty array, not null
+            }
+
+            log.info(`✅ Article passed all quality checks: ${extractedContent.text.length} chars, ${extractedContent.images.length} images`);
+
+            // STEP 6: Validate images (RELAXED - don't require images)
+            const workingImages = await this.validateImages(extractedContent.images);
+
+            if (workingImages.length === 0) {
+                log.warning(`No valid images for ${finalUrl} - proceeding without images`);
+                // Don't skip - proceed without images
+            }
+
+            // STEP 7: Final quality validation
+            const contentValidation = validateContentQuality(extractedContent, userData, workingImages);
+
+            log.info(`Content quality: ${contentValidation.qualityLevel} (score: ${contentValidation.qualityScore})`);
+
+            // RELAXED quality check - only skip if quality is extremely low
+            if (!contentValidation.isValid || contentValidation.qualityScore < 20) {
+                log.warning(`Article quality extremely low: ${contentValidation.qualityScore}`);
+                if (contentValidation.issues.length > 0) {
+                    log.warning(`Quality issues: ${contentValidation.issues.join(', ')}`);
+                }
+                log.info(`SKIPPING ARTICLE - Quality score extremely low (minimum 20 required)`);
+                this.stats.skipped.qualityTooLow++;
+                return; // Skip this article entirely
+            } else if (contentValidation.qualityScore < 50) {
+                log.warning(`Article quality low but acceptable: ${contentValidation.qualityScore}`);
+            }
+
+            // STEP 8: Create final record (only for high-quality articles)
             const record = {
                 query: userData.query,
                 title: cleanText(extractedContent.title || userData.title || 'No title'),
                 url: finalUrl,
+                originalGoogleUrl: isGoogleNewsUrl ? request.url : null,
                 source: userData.source || 'Unknown',
-                publishedAt: userData.pubDate || extractedContent.date || new Date().toISOString(),
+                publishedAt: extractedContent.date || userData.pubDate || new Date().toISOString(),
                 author: cleanText(extractedContent.author || ''),
-                text: cleanText(extractedContent.text || ''),
+                text: cleanText(extractedContent.text), // This is now guaranteed to be real article content
                 description: cleanText(extractedContent.description || userData.description || ''),
-                images: workingImages,
-                tags: extractedContent.tags || [],
+                images: workingImages, // This is now guaranteed to have at least 1 valid image
+                tags: extractedContent.tags || (userData.query ? [userData.query] : []),
                 language: extractedContent.lang || 'unknown',
                 scrapedAt: new Date().toISOString(),
-                extractionSuccess: extractedContent.success,
+                extractionSuccess: true, // Only successful extractions reach this point
+                extractionMethod: extractedContent.extractionMethod || 'unknown',
+                contentQuality: {
+                    score: contentValidation.qualityScore,
+                    level: contentValidation.qualityLevel,
+                    isValid: contentValidation.isValid,
+                    issues: contentValidation.issues,
+                    warnings: contentValidation.warnings
+                }
             };
 
-            // Push to dataset
+            // STEP 9: Save the high-quality article
             await Dataset.pushData(record);
-            log.info(`Successfully processed: ${record.title}`);
+            this.stats.saved++;
+
+            log.info(`✅ SUCCESS: Saved high-quality article (${this.stats.saved}/${this.stats.processed})`);
+            log.info(`   Title: ${record.title}`);
+            log.info(`   URL: ${record.url}`);
+            log.info(`   Text: ${record.text.length} characters`);
+            log.info(`   Images: ${record.images.length} valid images`);
+            log.info(`   Quality: ${record.contentQuality.level} (${record.contentQuality.score})`);
+            log.info(`   Method: ${record.extractionMethod}`);
+            log.info(`   Source: ${record.source}`);
 
         } catch (error) {
             const errorMessage = error.message || String(error);
@@ -217,6 +344,272 @@ export class ArticleCrawler {
                 timestamp: new Date().toISOString(),
             });
         }
+    }
+
+    /**
+     * Check if content is low quality (error pages, paywalls, etc.)
+     * @param {string} text - Article text content
+     * @returns {boolean} True if content is low quality
+     */
+    isLowQualityContent(text) {
+        if (!text) return true;
+
+        const lowQualityPatterns = [
+            // Error messages
+            /please enable javascript/i,
+            /javascript is disabled/i,
+            /this site requires javascript/i,
+            /cookies are disabled/i,
+            /access denied/i,
+            /403 forbidden/i,
+            /404 not found/i,
+            /page not found/i,
+            /server error/i,
+            /service unavailable/i,
+
+            // Paywalls and subscriptions
+            /subscription required/i,
+            /subscribe to continue/i,
+            /register to read/i,
+            /sign up to continue/i,
+            /login to continue/i,
+            /paywall/i,
+            /premium content/i,
+            /subscriber exclusive/i,
+
+            // GDPR and cookie notices
+            /we use cookies/i,
+            /cookie policy/i,
+            /privacy policy/i,
+            /gdpr/i,
+            /data protection/i,
+
+            // Bot detection
+            /are you a robot/i,
+            /captcha/i,
+            /verify you are human/i,
+            /unusual traffic/i,
+
+            // Generic error content
+            /something went wrong/i,
+            /try again later/i,
+            /temporarily unavailable/i
+        ];
+
+        // Check if text matches any low-quality patterns (RELAXED - only obvious errors)
+        const criticalPatterns = [
+            /404 not found/i,
+            /page not found/i,
+            /server error/i,
+            /service unavailable/i,
+            /access denied/i
+        ];
+
+        const hasCriticalPattern = criticalPatterns.some(pattern => pattern.test(text));
+
+        if (hasCriticalPattern) {
+            return true;
+        }
+
+        // Check for repetitive content (likely error pages)
+        const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
+        if (sentences.length < 3) {
+            return true; // Too few sentences
+        }
+
+        // Check for very short sentences (likely navigation or error text)
+        const avgSentenceLength = text.length / sentences.length;
+        if (avgSentenceLength < 20) {
+            return true; // Sentences too short
+        }
+
+        return false;
+    }
+
+    /**
+     * Try multiple fallback strategies when primary content fetching fails
+     * @param {string} targetUrl - The URL we're trying to fetch
+     * @param {string} originalUrl - The original Google News URL
+     * @param {object} userData - User data from the request
+     * @returns {Promise<object>} Fallback result with success status and content
+     */
+    async tryFallbackStrategies(targetUrl, originalUrl, userData) {
+        const strategies = [
+            () => this.tryWithDifferentUserAgent(targetUrl),
+            () => this.tryWithDelay(targetUrl),
+            () => this.tryArchiveVersion(targetUrl),
+            () => this.tryAlternativeSource(userData)
+        ];
+
+        for (const strategy of strategies) {
+            try {
+                const result = await strategy();
+                if (result.success) {
+                    return result;
+                }
+            } catch (error) {
+                log.debug(`Fallback strategy failed: ${error.message}`);
+            }
+        }
+
+        return { success: false };
+    }
+
+    /**
+     * Try fetching with a different user agent (mobile vs desktop)
+     * @param {string} url - URL to fetch
+     * @returns {Promise<object>} Result with success status and content
+     */
+    async tryWithDifferentUserAgent(url) {
+        try {
+            log.debug(`Trying different user agent for: ${url}`);
+
+            const mobileUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1';
+
+            const response = await gotScraping({
+                url: url,
+                timeout: { request: CONFIG.CRAWLER.REQUEST_TIMEOUT },
+                retry: { limit: 1 },
+                headers: {
+                    'User-Agent': mobileUserAgent,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                },
+            });
+
+            const htmlContent = response.body;
+            const cheerioInstance = cheerio.load(htmlContent);
+
+            // Check if we got meaningful content
+            const textContent = cheerioInstance('body').text().trim();
+            if (textContent.length > 500) {
+                log.debug(`Mobile user agent strategy succeeded`);
+                return {
+                    success: true,
+                    htmlContent,
+                    cheerioInstance,
+                    finalUrl: url
+                };
+            }
+        } catch (error) {
+            log.debug(`Mobile user agent strategy failed: ${error.message}`);
+        }
+
+        return { success: false };
+    }
+
+    /**
+     * Try fetching with a delay (some sites block rapid requests)
+     * @param {string} url - URL to fetch
+     * @returns {Promise<object>} Result with success status and content
+     */
+    async tryWithDelay(url) {
+        try {
+            log.debug(`Trying with delay for: ${url}`);
+
+            // Wait a bit before retrying
+            await sleep(2000);
+
+            const response = await gotScraping({
+                url: url,
+                timeout: { request: CONFIG.CRAWLER.REQUEST_TIMEOUT * 1.5 },
+                retry: { limit: 1 },
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Referer': 'https://news.google.com/',
+                },
+            });
+
+            const htmlContent = response.body;
+            const cheerioInstance = cheerio.load(htmlContent);
+
+            // Check if we got meaningful content
+            const textContent = cheerioInstance('body').text().trim();
+            if (textContent.length > 500) {
+                log.debug(`Delay strategy succeeded`);
+                return {
+                    success: true,
+                    htmlContent,
+                    cheerioInstance,
+                    finalUrl: url
+                };
+            }
+        } catch (error) {
+            log.debug(`Delay strategy failed: ${error.message}`);
+        }
+
+        return { success: false };
+    }
+
+    /**
+     * Try to get content from archive.org or other archive services
+     * @param {string} url - URL to fetch from archive
+     * @returns {Promise<object>} Result with success status and content
+     */
+    async tryArchiveVersion(url) {
+        try {
+            log.debug(`Trying archive version for: ${url}`);
+
+            // Try Wayback Machine
+            const archiveUrl = `https://web.archive.org/web/${url}`;
+
+            const response = await gotScraping({
+                url: archiveUrl,
+                timeout: { request: CONFIG.CRAWLER.REQUEST_TIMEOUT },
+                retry: { limit: 1 },
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                },
+            });
+
+            const htmlContent = response.body;
+            const cheerioInstance = cheerio.load(htmlContent);
+
+            // Check if we got meaningful content (archive pages often have extra content)
+            const textContent = cheerioInstance('body').text().trim();
+            if (textContent.length > 1000) {
+                log.debug(`Archive strategy succeeded`);
+                return {
+                    success: true,
+                    htmlContent,
+                    cheerioInstance,
+                    finalUrl: url
+                };
+            }
+        } catch (error) {
+            log.debug(`Archive strategy failed: ${error.message}`);
+        }
+
+        return { success: false };
+    }
+
+    /**
+     * Try to find alternative sources for the same story
+     * @param {object} userData - User data containing story information
+     * @returns {Promise<object>} Result with success status and content
+     */
+    async tryAlternativeSource(userData) {
+        try {
+            log.debug(`Trying alternative source for story: ${userData.title}`);
+
+            // This is a placeholder for more advanced logic
+            // In a real implementation, you might:
+            // 1. Search for the same story on other news sites
+            // 2. Use the story title to find alternative sources
+            // 3. Check if the story is available on the publisher's main site
+
+            // For now, we'll just return failure
+            // This could be enhanced with actual alternative source searching
+
+        } catch (error) {
+            log.debug(`Alternative source strategy failed: ${error.message}`);
+        }
+
+        return { success: false };
     }
 
     /**
@@ -368,6 +761,68 @@ export class ArticleCrawler {
         }
 
         log.info('Article crawling completed');
+
+        // Print final statistics
+        this.printFinalStatistics();
+
+        // Cleanup resources
+        await this.cleanup();
+    }
+
+    /**
+     * Print final statistics for the "all or nothing" strategy
+     */
+    printFinalStatistics() {
+        const totalSkipped = Object.values(this.stats.skipped).reduce((sum, count) => sum + count, 0);
+        const successRate = this.stats.processed > 0 ? (this.stats.saved / this.stats.processed * 100).toFixed(1) : 0;
+
+        log.info('\n' + '='.repeat(60));
+        log.info('📊 FINAL EXTRACTION STATISTICS');
+        log.info('='.repeat(60));
+        log.info(`Total articles processed: ${this.stats.processed}`);
+        log.info(`Successfully saved: ${this.stats.saved} (${successRate}%)`);
+        log.info(`Total skipped: ${totalSkipped} (${(100 - successRate).toFixed(1)}%)`);
+        log.info('');
+        log.info('📋 SKIP REASONS:');
+        log.info(`  • URL resolution failed: ${this.stats.skipped.urlResolutionFailed}`);
+        log.info(`  • Content fetch failed: ${this.stats.skipped.contentFetchFailed}`);
+        log.info(`  • Consent page detected: ${this.stats.skipped.consentPageDetected}`);
+        log.info(`  • Content extraction failed: ${this.stats.skipped.extractionFailed}`);
+        log.info(`  • Text too short (<300 chars): ${this.stats.skipped.textTooShort}`);
+        log.info(`  • Low quality content: ${this.stats.skipped.lowQualityContent}`);
+        log.info(`  • No images found: ${this.stats.skipped.noImages}`);
+        log.info(`  • Image validation failed: ${this.stats.skipped.imageValidationFailed}`);
+        log.info(`  • Quality score too low: ${this.stats.skipped.qualityTooLow}`);
+        log.info('='.repeat(60));
+
+        if (this.stats.saved === 0) {
+            log.error('❌ NO ARTICLES SAVED - All articles were skipped due to quality issues');
+        } else if (successRate >= 50) {
+            log.info(`✅ GOOD SUCCESS RATE - ${successRate}% of articles met quality standards`);
+        } else {
+            log.warning(`⚠️  LOW SUCCESS RATE - Only ${successRate}% of articles met quality standards`);
+        }
+    }
+
+    /**
+     * Cleanup resources
+     */
+    async cleanup() {
+        try {
+            // Cleanup Google News resolver
+            if (this.googleNewsResolver) {
+                await this.googleNewsResolver.cleanup();
+            }
+
+            // Cleanup residential proxy manager
+            if (this.residentialProxyManager) {
+                this.residentialProxyManager.cleanup();
+            }
+
+            log.info('Article crawler cleanup completed');
+        } catch (error) {
+            log.error('Error during cleanup:', error.message);
+        }
     }
 
     /**

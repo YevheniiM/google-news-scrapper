@@ -4,7 +4,7 @@
 
 import unfluff from 'unfluff';
 import { log } from 'crawlee';
-import { cleanText } from './utils.js';
+import { cleanText, cleanHtmlContent } from './utils.js';
 
 /**
  * Content Extractor class with multiple extraction strategies
@@ -13,6 +13,7 @@ export class ContentExtractor {
     constructor() {
         this.extractionStrategies = [
             this.extractWithUnfluff.bind(this),
+            this.extractWithHtmlCleaning.bind(this),
             this.extractWithSelectors.bind(this),
             this.extractWithHeuristics.bind(this),
         ];
@@ -42,6 +43,143 @@ export class ContentExtractor {
             log.debug('Unfluff extraction failed:', error.message);
             return { success: false };
         }
+    }
+
+    /**
+     * Extract content using HTML cleaning and structure analysis
+     * @param {string} html - HTML content
+     * @param {object} $ - Cheerio instance
+     * @returns {object} Extracted content
+     */
+    extractWithHtmlCleaning(html, $) {
+        try {
+            if (!$) return { success: false };
+
+            // Use the HTML cleaning function to get clean content
+            const cleanedContent = cleanHtmlContent($);
+
+            // Extract additional metadata
+            const author = this.extractAuthor($);
+            const date = this.extractDate($);
+            const tags = this.extractTags($);
+            const lang = $('html').attr('lang') || 'unknown';
+
+            return {
+                title: cleanedContent.title,
+                text: cleanedContent.text,
+                author: author,
+                date: date,
+                description: cleanedContent.description,
+                image: null, // Will be handled by image extraction
+                tags: tags,
+                lang: lang,
+                success: !!(cleanedContent.title || cleanedContent.text),
+            };
+        } catch (error) {
+            log.debug('HTML cleaning extraction failed:', error.message);
+            return { success: false };
+        }
+    }
+
+    /**
+     * Extract author information from various sources
+     * @param {object} $ - Cheerio instance
+     * @returns {string} Author name
+     */
+    extractAuthor($) {
+        const authorSelectors = [
+            '.author',
+            '.byline',
+            '.article-author',
+            '.post-author',
+            '[data-testid="author"]',
+            '.writer',
+            '[rel="author"]',
+            '.by-author',
+            '.author-name',
+            'meta[name="author"]',
+            'meta[property="article:author"]'
+        ];
+
+        for (const selector of authorSelectors) {
+            const element = $(selector).first();
+            if (element.length > 0) {
+                const text = element.attr('content') || element.text().trim();
+                if (text && text.length > 0 && text.length < 100) {
+                    return cleanText(text);
+                }
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Extract publication date from various sources
+     * @param {object} $ - Cheerio instance
+     * @returns {string|null} Date string
+     */
+    extractDate($) {
+        const dateSelectors = [
+            'time[datetime]',
+            'time[pubdate]',
+            '.date',
+            '.publish-date',
+            '.article-date',
+            '.post-date',
+            '[data-testid="timestamp"]',
+            'meta[property="article:published_time"]',
+            'meta[name="publish-date"]'
+        ];
+
+        for (const selector of dateSelectors) {
+            const element = $(selector).first();
+            if (element.length > 0) {
+                const dateValue = element.attr('datetime') ||
+                                element.attr('content') ||
+                                element.text().trim();
+
+                if (dateValue) {
+                    // Try to parse the date
+                    const parsedDate = new Date(dateValue);
+                    if (!isNaN(parsedDate.getTime())) {
+                        return parsedDate.toISOString();
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract tags from various sources
+     * @param {object} $ - Cheerio instance
+     * @returns {Array<string>} Array of tags
+     */
+    extractTags($) {
+        const tags = new Set();
+
+        // Extract from meta keywords
+        const keywords = $('meta[name="keywords"]').attr('content');
+        if (keywords) {
+            keywords.split(',').forEach(tag => {
+                const cleanTag = tag.trim();
+                if (cleanTag.length > 0 && cleanTag.length < 50) {
+                    tags.add(cleanTag);
+                }
+            });
+        }
+
+        // Extract from article tags
+        $('.tag, .tags a, .category, .categories a').each((_, element) => {
+            const tagText = $(element).text().trim();
+            if (tagText.length > 0 && tagText.length < 50) {
+                tags.add(tagText);
+            }
+        });
+
+        return Array.from(tags);
     }
 
     /**

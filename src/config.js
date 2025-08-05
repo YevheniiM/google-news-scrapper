@@ -35,6 +35,15 @@ export const CONFIG = {
         DATACENTER_GROUP: 'DATACENTER',
         SESSION_MAX_USAGE: 5,
         SESSION_MAX_ERROR_SCORE: 3,
+        // Residential proxy settings for bypassing anti-bot measures
+        RESIDENTIAL_ENABLED: true,
+        RESIDENTIAL_COUNTRIES: ['US', 'GB', 'CA', 'AU'],
+        RESIDENTIAL_STICKY_SESSION: true,
+        RESIDENTIAL_ROTATION_INTERVAL: 300000, // 5 minutes
+        // Fallback proxy settings
+        DATACENTER_FALLBACK: true,
+        PROXY_TIMEOUT: 30000,
+        MAX_PROXY_RETRIES: 3,
     },
 
     // Session management configuration
