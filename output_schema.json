@@ -48,10 +48,30 @@
     "images": {
       "type": "array",
       "title": "Images",
-      "description": "Array of image URLs found in the article",
+      "description": "Array of image objects found in the article with metadata",
       "items": {
-        "type": "string",
-        "format": "uri"
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "The image URL"
+          },
+          "type": {
+            "type": "string",
+            "description": "Type of image (featured-og, featured-twitter, content, etc.)"
+          },
+          "alt": {
+            "type": "string",
+            "description": "Alt text of the image"
+          },
+          "caption": {
+            "type": "string",
+            "description": "Caption or description of the image"
+          }
+        },
+        "required": ["url", "type"],
+        "additionalProperties": false
       }
     },
     "tags": {

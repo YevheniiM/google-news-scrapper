@@ -2,9 +2,9 @@
  * Enhanced content extraction with multiple fallback strategies
  */
 
-import unfluff from 'unfluff';
 import { log } from 'crawlee';
 import { cleanText, cleanHtmlContent } from './utils.js';
+import * as cheerio from 'cheerio';
 
 /**
  * Content Extractor class with multiple extraction strategies
@@ -12,7 +12,7 @@ import { cleanText, cleanHtmlContent } from './utils.js';
 export class ContentExtractor {
     constructor() {
         this.extractionStrategies = [
-            this.extractWithUnfluff.bind(this),
+            this.extractWithMetaTags.bind(this),
             this.extractWithHtmlCleaning.bind(this),
             this.extractWithSelectors.bind(this),
             this.extractWithHeuristics.bind(this),
@@ -20,27 +20,76 @@ export class ContentExtractor {
     }
 
     /**
-     * Extract content using Unfluff library
+     * Extract content using meta tags and structured data
      * @param {string} html - HTML content
      * @param {object} $ - Cheerio instance
      * @returns {object} Extracted content
      */
-    extractWithUnfluff(html, $) {
+    extractWithMetaTags(html, $) {
         try {
-            const data = unfluff(html);
+            // Extract title from various sources
+            const title = $('title').text() ||
+                         $('meta[property="og:title"]').attr('content') ||
+                         $('meta[name="twitter:title"]').attr('content') ||
+                         $('h1').first().text();
+
+            // Extract description
+            const description = $('meta[name="description"]').attr('content') ||
+                              $('meta[property="og:description"]').attr('content') ||
+                              $('meta[name="twitter:description"]').attr('content');
+
+            // Extract author
+            const author = $('meta[name="author"]').attr('content') ||
+                          $('meta[property="article:author"]').attr('content') ||
+                          $('[rel="author"]').text() ||
+                          $('.author').text();
+
+            // Extract publish date
+            const date = $('meta[property="article:published_time"]').attr('content') ||
+                        $('meta[name="date"]').attr('content') ||
+                        $('time[datetime]').attr('datetime') ||
+                        $('time').attr('datetime');
+
+            // Extract main content from common selectors
+            const contentSelectors = [
+                'article', '.article', '#article',
+                '.content', '#content', '.post-content',
+                '.entry-content', '.main-content', 'main'
+            ];
+
+            let text = '';
+            for (const selector of contentSelectors) {
+                const element = $(selector);
+                if (element.length && element.text().trim().length > 100) {
+                    text = element.text().trim();
+                    break;
+                }
+            }
+
+            // Extract image
+            const image = $('meta[property="og:image"]').attr('content') ||
+                         $('meta[name="twitter:image"]').attr('content') ||
+                         $('img').first().attr('src');
+
+            // Extract language
+            const lang = $('html').attr('lang') ||
+                        $('meta[http-equiv="content-language"]').attr('content') ||
+                        'unknown';
+
             return {
-                title: data.title,
-                text: data.text,
-                author: data.author,
-                date: data.date,
-                description: data.description,
-                image: data.image,
-                tags: data.tags || [],
-                lang: data.lang,
-                success: !!(data.title || data.text),
+                title: cleanText(title || ''),
+                text: cleanText(text || ''),
+                author: cleanText(author || ''),
+                date: date || '',
+                description: cleanText(description || ''),
+                image: image || '',
+                tags: [],
+                lang: lang,
+                success: !!(title && text && text.length > 100),
+                extractionMethod: 'meta-tags'
             };
         } catch (error) {
-            log.debug('Unfluff extraction failed:', error.message);
+            log.debug('Meta tags extraction failed:', error.message);
             return { success: false };
         }
     }

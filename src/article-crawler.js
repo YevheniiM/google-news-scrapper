@@ -637,11 +637,11 @@ export class ArticleCrawler {
 
     /**
      * Validate image URLs
-     * @param {Array<string>} imageUrls - Array of image URLs
-     * @returns {Promise<Array<string>>} Array of working image URLs
+     * @param {Array<object|string>} images - Array of image objects or URLs
+     * @returns {Promise<Array<object>>} Array of working image objects
      */
-    async validateImages(imageUrls) {
-        if (!imageUrls || imageUrls.length === 0) {
+    async validateImages(images) {
+        if (!images || images.length === 0) {
             return [];
         }
 
@@ -649,28 +649,34 @@ export class ArticleCrawler {
         const validationPromises = [];
 
         // Process images in batches to avoid overwhelming the server
-        for (let i = 0; i < imageUrls.length; i += CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS) {
-            const batch = imageUrls.slice(i, i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS);
-            
-            const batchPromises = batch.map(async (imageUrl) => {
+        for (let i = 0; i < images.length; i += CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS) {
+            const batch = images.slice(i, i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS);
+
+            const batchPromises = batch.map(async (image) => {
+                // Handle both object format (new) and string format (legacy)
+                const imageUrl = typeof image === 'string' ? image : image.url;
+                const imageObj = typeof image === 'string' ? { url: image, type: 'unknown', alt: '', caption: '' } : image;
+
+                if (!imageUrl) return;
+
                 const isValid = await validateImageUrl(imageUrl, gotScraping);
                 if (isValid) {
-                    workingImages.push(imageUrl);
+                    workingImages.push(imageObj);
                 }
             });
 
             validationPromises.push(...batchPromises);
-            
+
             // Wait for batch to complete before processing next batch
             await Promise.allSettled(batchPromises);
-            
+
             // Small delay between batches
-            if (i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS < imageUrls.length) {
+            if (i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS < images.length) {
                 await sleep(100);
             }
         }
 
-        log.debug(`Image validation: ${workingImages.length}/${imageUrls.length} images are accessible`);
+        log.debug(`Image validation: ${workingImages.length}/${images.length} images are accessible`);
         return workingImages;
     }
 

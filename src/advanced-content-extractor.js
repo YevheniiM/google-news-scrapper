@@ -55,7 +55,7 @@ export class AdvancedContentExtractor {
             const $ = cheerio.load(html);
             const author = this.extractAuthor($);
             const publishDate = this.extractPublishDate($);
-            const images = this.extractImagesFromContent(article.content, url);
+            const images = this.extractAllImages($, null, url);
             
             return {
                 title: cleanText(article.title || ''),
@@ -140,8 +140,8 @@ export class AdvancedContentExtractor {
                 }
             }
             
-            // Extract images from content
-            const images = contentElement ? this.extractImagesFromElement(contentElement, $, url) : [];
+            // Extract images from content AND meta tags
+            const images = this.extractAllImages($, contentElement, url);
             
             // Extract metadata
             const author = this.extractAuthor($);
@@ -214,7 +214,7 @@ export class AdvancedContentExtractor {
             
             const title = this.extractTitle($);
             const mainContent = bestElement.text().trim();
-            const images = this.extractImagesFromElement(bestElement, $, url);
+            const images = this.extractAllImages($, bestElement, url);
             const author = this.extractAuthor($);
             const publishDate = this.extractPublishDate($);
             const description = this.extractDescription($);
@@ -468,6 +468,143 @@ export class AdvancedContentExtractor {
         }
         
         return bestResult;
+    }
+
+    /**
+     * Extract all images from both content and meta tags
+     * @param {object} $ - Cheerio instance
+     * @param {object} contentElement - Content element (optional)
+     * @param {string} baseUrl - Base URL for resolving relative URLs
+     * @returns {Array} Array of image objects
+     */
+    extractAllImages($, contentElement = null, baseUrl) {
+        const images = new Map(); // Use Map to avoid duplicates
+
+        // Helper function to add image with metadata
+        const addImage = (src, type, alt = '', caption = '') => {
+            if (!src) return;
+
+            try {
+                // Convert relative URLs to absolute
+                let absoluteUrl;
+                if (src.startsWith('http')) {
+                    absoluteUrl = src;
+                } else if (baseUrl) {
+                    absoluteUrl = new URL(src, baseUrl).href;
+                } else {
+                    return; // Skip relative URLs if no base URL provided
+                }
+
+                // Skip data URLs and very small images (likely icons)
+                if (absoluteUrl.startsWith('data:') ||
+                    absoluteUrl.includes('1x1') ||
+                    absoluteUrl.includes('pixel') ||
+                    absoluteUrl.includes('spacer') ||
+                    absoluteUrl.includes('logo') ||
+                    absoluteUrl.includes('icon')) {
+                    return;
+                }
+
+                // Create image object with metadata
+                const imageObj = {
+                    url: absoluteUrl,
+                    type: type,
+                    alt: alt || '',
+                    caption: caption || '',
+                    width: null,
+                    height: null
+                };
+
+                images.set(absoluteUrl, imageObj);
+            } catch (error) {
+                // Ignore URL parsing errors
+            }
+        };
+
+        // 1. Extract meta tag images (often the main article images)
+        // OpenGraph images
+        $('meta[property="og:image"], meta[property="og:image:url"]').each((_, element) => {
+            const content = $(element).attr('content');
+            if (content) {
+                addImage(content, 'featured-og');
+            }
+        });
+
+        // Twitter card images
+        $('meta[name="twitter:image"], meta[name="twitter:image:src"]').each((_, element) => {
+            const content = $(element).attr('content');
+            if (content) {
+                addImage(content, 'featured-twitter');
+            }
+        });
+
+        // Schema.org images
+        $('meta[itemprop="image"]').each((_, element) => {
+            const content = $(element).attr('content');
+            if (content) {
+                addImage(content, 'featured-schema');
+            }
+        });
+
+        // 2. Extract images from content element (if provided)
+        if (contentElement) {
+            contentElement.find('img').each((_, img) => {
+                const $img = $(img);
+                const src = $img.attr('src') || $img.attr('data-src') || $img.attr('data-lazy-src');
+                const alt = $img.attr('alt') || '';
+                const caption = $img.closest('figure').find('figcaption').text().trim() ||
+                               $img.parent().find('.caption').text().trim() || '';
+
+                if (src) {
+                    addImage(src, 'content', alt, caption);
+                }
+            });
+        }
+
+        // 3. Extract images from common article selectors (fallback)
+        const articleSelectors = [
+            'article img',
+            '.article img',
+            '.content img',
+            '.post img',
+            '.entry-content img',
+            '.story-body img',
+            '.article-body img',
+            '.post-content img',
+            '.ArticleBody img',
+            '.ArticleBody-articleBody img',
+            '[data-module="ArticleBody"] img',
+            'main img'
+        ];
+
+        for (const selector of articleSelectors) {
+            $(selector).each((_, img) => {
+                const $img = $(img);
+                const src = $img.attr('src') || $img.attr('data-src') || $img.attr('data-lazy-src');
+                const alt = $img.attr('alt') || '';
+                const caption = $img.closest('figure').find('figcaption').text().trim() ||
+                               $img.parent().find('.caption').text().trim() || '';
+
+                if (src) {
+                    addImage(src, 'content', alt, caption);
+                }
+            });
+        }
+
+        // 4. Extract from picture elements
+        $('picture').each((_, picture) => {
+            const $picture = $(picture);
+            const img = $picture.find('img').first();
+            if (img.length > 0) {
+                const src = img.attr('src') || img.attr('data-src');
+                const alt = img.attr('alt') || '';
+                if (src) {
+                    addImage(src, 'content', alt);
+                }
+            }
+        });
+
+        return Array.from(images.values());
     }
 
     /**
