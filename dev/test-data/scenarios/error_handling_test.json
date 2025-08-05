@@ -1,0 +1,16 @@
+{
+  "name": "error_handling_test",
+  "description": "Test error handling and recovery",
+  "input": {
+    "query": "nonexistent",
+    "region": "XX",
+    "language": "xx-XX",
+    "maxItems": 1
+  },
+  "expected": {
+    "success": false
+  },
+  "assertions": [
+    null
+  ]
+}

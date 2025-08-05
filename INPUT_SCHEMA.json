@@ -1,0 +1,97 @@
+{
+  "title": "Google News Scraper",
+  "description": "A comprehensive Google News scraper that extracts articles with full text, images, and metadata using RSS feeds and article crawling.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "query": {
+      "title": "Search Query",
+      "type": "string",
+      "description": "Google News search query (e.g., 'artificial intelligence', 'climate change', 'Tesla')",
+      "example": "artificial intelligence",
+      "minLength": 1,
+      "editor": "textfield"
+    },
+    "region": {
+      "title": "Country/Region",
+      "type": "string",
+      "description": "Country code for regional news (affects which articles are shown)",
+      "default": "US",
+      "example": "US",
+      "editor": "select",
+      "enum": [
+        "US", "GB", "CA", "AU", "DE", "FR", "IT", "ES", "NL", "BE", "CH", "AT",
+        "SE", "NO", "DK", "FI", "PL", "CZ", "HU", "RO", "BG", "HR", "SI", "SK",
+        "EE", "LV", "LT", "IE", "PT", "GR", "CY", "MT", "LU", "IS", "LI", "AD",
+        "MC", "SM", "VA", "JP", "KR", "CN", "HK", "TW", "SG", "MY", "TH", "VN",
+        "PH", "ID", "IN", "PK", "BD", "LK", "NP", "BT", "MV", "AF", "IR", "IQ",
+        "SA", "AE", "QA", "BH", "KW", "OM", "YE", "JO", "LB", "SY", "IL", "PS",
+        "TR", "EG", "LY", "TN", "DZ", "MA", "SD", "ET", "KE", "UG", "TZ", "RW",
+        "BI", "DJ", "SO", "ER", "SS", "CF", "TD", "CM", "GQ", "GA", "CG", "CD",
+        "AO", "ZM", "ZW", "BW", "NA", "SZ", "LS", "ZA", "MZ", "MW", "MG", "MU",
+        "SC", "KM", "YT", "RE", "MX", "GT", "BZ", "SV", "HN", "NI", "CR", "PA",
+        "CU", "JM", "HT", "DO", "PR", "VI", "AG", "DM", "LC", "VC", "GD", "BB",
+        "TT", "GY", "SR", "FK", "BR", "AR", "UY", "PY", "BO", "PE", "EC", "CO",
+        "VE", "GF", "RU", "UA", "BY", "MD", "GE", "AM", "AZ", "KZ", "KG", "TJ",
+        "TM", "UZ", "MN"
+      ]
+    },
+    "language": {
+      "title": "Language",
+      "type": "string",
+      "description": "Language code for the news content",
+      "default": "en-US",
+      "example": "en-US",
+      "editor": "select",
+      "enum": [
+        "en-US", "en-GB", "en-CA", "en-AU", "de-DE", "fr-FR", "it-IT", "es-ES",
+        "nl-NL", "pt-PT", "pt-BR", "ru-RU", "ja-JP", "ko-KR", "zh-CN", "zh-TW",
+        "ar-SA", "hi-IN", "tr-TR", "pl-PL", "cs-CZ", "hu-HU", "ro-RO", "bg-BG",
+        "hr-HR", "sl-SI", "sk-SK", "et-EE", "lv-LV", "lt-LT", "fi-FI", "sv-SE",
+        "no-NO", "da-DK", "is-IS", "el-GR", "he-IL", "th-TH", "vi-VN", "id-ID",
+        "ms-MY", "tl-PH", "uk-UA", "be-BY", "ka-GE", "hy-AM", "az-AZ", "kk-KZ",
+        "ky-KG", "tg-TJ", "tk-TM", "uz-UZ", "mn-MN", "fa-IR", "ur-PK", "bn-BD",
+        "ta-IN", "te-IN", "ml-IN", "kn-IN", "gu-IN", "pa-IN", "or-IN", "as-IN",
+        "ne-NP", "si-LK", "my-MM", "km-KH", "lo-LA", "am-ET", "sw-KE",
+        "zu-ZA", "af-ZA", "xh-ZA", "st-ZA", "tn-ZA", "ve-ZA", "ts-ZA", "ss-ZA",
+        "nr-ZA", "nso-ZA", "es-MX", "es-AR", "es-CO", "es-VE", "es-PE", "es-EC",
+        "es-CL", "es-UY", "es-PY", "es-BO", "es-CR", "es-PA", "es-GT", "es-HN",
+        "es-SV", "es-NI", "es-DO", "es-CU", "es-PR"
+      ]
+    },
+    "maxItems": {
+      "title": "Maximum Articles",
+      "type": "integer",
+      "description": "Maximum number of articles to scrape (0 = unlimited, limited by Google's RSS feed capacity ~100-200 articles)",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 10000,
+      "example": 100,
+      "editor": "number"
+    },
+    "dateFrom": {
+      "title": "Date From",
+      "type": "string",
+      "description": "Start date for articles (YYYY-MM-DD format). If not specified, will use articles from the last 30 days.",
+      "example": "2024-01-01",
+      "editor": "datepicker"
+    },
+    "dateTo": {
+      "title": "Date To",
+      "type": "string",
+      "description": "End date for articles (YYYY-MM-DD format). If not specified, will use today's date.",
+      "example": "2024-12-31",
+      "editor": "datepicker"
+    },
+    "useBrowser": {
+      "title": "Use Browser Mode",
+      "type": "boolean",
+      "description": "Use Playwright browser for JavaScript-rendered pages (slower but handles complex sites). Recommended for paywalled or JS-heavy sites.",
+      "default": false,
+      "example": false,
+      "editor": "checkbox"
+    }
+  },
+  "required": ["query"],
+  "additionalProperties": false
+}

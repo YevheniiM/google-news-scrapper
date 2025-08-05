@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+<generator>NFE/5.0</generator>
+<title>"artificial intelligence" - Google News</title>
+<language>en-US</language>
+<webMaster>news-webmaster@google.com</webMaster>
+<copyright>2024 Google Inc.</copyright>
+<lastBuildDate>Sun, 04 Aug 2024 16:00:00 GMT</lastBuildDate>
+<description>Google News</description>
+<item>
+<title><![CDATA[AI Breakthrough in Medical Diagnosis]]></title>
+<link>https://news.google.com/rss/articles/CBMiTestUrl1?oc=5</link>
+<guid isPermaLink="false">CBMiTestUrl1</guid>
+<pubDate>Sun, 04 Aug 2024 15:30:00 GMT</pubDate>
+<description><![CDATA[Scientists develop new AI system for early disease detection with 95% accuracy rate.]]></description>
+<source url="https://techcrunch.com">TechCrunch</source>
+</item>
+<item>
+<title><![CDATA[Machine Learning Transforms Finance Industry]]></title>
+<link>https://news.google.com/rss/articles/CBMiTestUrl2?oc=5</link>
+<guid isPermaLink="false">CBMiTestUrl2</guid>
+<pubDate>Sun, 04 Aug 2024 14:45:00 GMT</pubDate>
+<description><![CDATA[Banks adopt advanced ML algorithms for fraud detection and risk assessment.]]></description>
+<source url="https://reuters.com">Reuters</source>
+</item>
+<item>
+<title><![CDATA[OpenAI Announces New Language Model]]></title>
+<link>https://news.google.com/rss/articles/CBMiTestUrl3?oc=5</link>
+<guid isPermaLink="false">CBMiTestUrl3</guid>
+<pubDate>Sun, 04 Aug 2024 13:20:00 GMT</pubDate>
+<description><![CDATA[Latest GPT model shows significant improvements in reasoning and code generation.]]></description>
+<source url="https://theverge.com">The Verge</source>
+</item>
+<item>
+<title><![CDATA[AI Ethics Guidelines Updated by Tech Giants]]></title>
+<link>https://news.google.com/rss/articles/CBMiTestUrl4?oc=5</link>
+<guid isPermaLink="false">CBMiTestUrl4</guid>
+<pubDate>Sun, 04 Aug 2024 12:15:00 GMT</pubDate>
+<description><![CDATA[Major technology companies collaborate on new ethical AI development standards.]]></description>
+<source url="https://wired.com">Wired</source>
+</item>
+<item>
+<title><![CDATA[Autonomous Vehicles Reach New Milestone]]></title>
+<link>https://news.google.com/rss/articles/CBMiTestUrl5?oc=5</link>
+<guid isPermaLink="false">CBMiTestUrl5</guid>
+<pubDate>Sun, 04 Aug 2024 11:30:00 GMT</pubDate>
+<description><![CDATA[Self-driving cars complete 1 million miles of testing without human intervention.]]></description>
+<source url="https://cnn.com">CNN</source>
+</item>
+</channel>
+</rss>

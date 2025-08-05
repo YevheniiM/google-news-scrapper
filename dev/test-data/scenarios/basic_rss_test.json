@@ -1,0 +1,16 @@
+{
+  "name": "basic_rss_test",
+  "description": "Test basic RSS feed processing",
+  "input": {
+    "query": "test",
+    "region": "US",
+    "language": "en-US",
+    "maxItems": 5
+  },
+  "expected": {
+    "articles.size": 2
+  },
+  "assertions": [
+    null
+  ]
+}

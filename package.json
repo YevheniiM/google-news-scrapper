@@ -1,0 +1,55 @@
+{
+	"name": "google-news-scraper",
+	"version": "0.0.1",
+	"type": "module",
+	"description": "A comprehensive Google News scraper that extracts articles with full text, images, and metadata using RSS feeds and article crawling.",
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"dependencies": {
+		"apify": "^3.2.6",
+		"crawlee": "^3.13.2",
+		"dotenv": "^16.4.5",
+		"fast-xml-parser": "^4.3.2",
+		"got-scraping": "^3.2.15",
+		"playwright": "^1.54.2",
+		"unfluff": "^3.2.0"
+	},
+	"devDependencies": {
+		"@apify/eslint-config": "^1.0.0",
+		"eslint": "^8.57.0",
+		"eslint-config-prettier": "^10.1.5",
+		"jest": "^29.7.0",
+		"nodemon": "^3.0.2",
+		"prettier": "^3.5.3"
+	},
+	"scripts": {
+		"start": "node src/main.js",
+		"dev": "NODE_ENV=development DEBUG=true node src/main.js",
+		"dev:watch": "NODE_ENV=development DEBUG=true nodemon src/main.js",
+		"dev:debug": "NODE_ENV=development DEBUG=true node --inspect src/main.js",
+		"dev:test": "NODE_ENV=development node dev/test-runner.js",
+		"dev:mock": "NODE_ENV=development USE_MOCK_DATA=true node src/main.js",
+		"dev:scenarios": "node dev/scenario-runner.js",
+		"dev:health": "node dev/health-check.js",
+		"dev:clean": "node dev/cleanup.js",
+		"dev:setup": "node dev/setup.js",
+		"test": "jest",
+		"test:watch": "jest --watch",
+		"test:coverage": "jest --coverage",
+		"test:unit": "jest tests/unit",
+		"test:integration": "jest tests/integration",
+		"test:performance": "jest tests/performance",
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
+		"lint": "eslint",
+		"lint:fix": "eslint --fix",
+		"logs": "tail -f logs/scraper.log",
+		"logs:errors": "tail -f logs/errors/*.log",
+		"monitor": "node dev/monitor.js",
+		"benchmark": "node dev/benchmark.js",
+		"validate": "node dev/validate.js"
+	},
+	"author": "Google News Scraper",
+	"license": "MIT"
+}

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+<generator>NFE/5.0</generator>
+<title>"development test" - Google News</title>
+<language>en-US</language>
+<webMaster>news-webmaster@google.com</webMaster>
+<copyright>2024 Google Inc.</copyright>
+<lastBuildDate>Mon, 04 Aug 2025 18:29:38 GMT</lastBuildDate>
+<description>Google News</description>
+<item>
+<title><![CDATA[Development Test Article 1]]></title>
+<link>https://news.google.com/rss/articles/CBMiDevTest1?oc=5</link>
+<guid isPermaLink="false">CBMiDevTest1</guid>
+<pubDate>Mon, 04 Aug 2025 18:29:38 GMT</pubDate>
+<description><![CDATA[This is a test article for development purposes.]]></description>
+<source url="https://example.com">Dev News</source>
+</item>
+<item>
+<title><![CDATA[Development Test Article 2]]></title>
+<link>https://news.google.com/rss/articles/CBMiDevTest2?oc=5</link>
+<guid isPermaLink="false">CBMiDevTest2</guid>
+<pubDate>Mon, 04 Aug 2025 17:29:38 GMT</pubDate>
+<description><![CDATA[Another test article for development.]]></description>
+<source url="https://example.com">Dev News</source>
+</item>
+</channel>
+</rss>

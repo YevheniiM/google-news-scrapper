@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Before you continue</title>
+</head>
+<body>
+    <div class="consent-container">
+        <h1>Before you continue</h1>
+        <p>We use cookies and data to:</p>
+        <ul>
+            <li>Deliver and maintain Google services</li>
+            <li>Track outages and protect against spam, fraud, and abuse</li>
+            <li>Measure audience engagement and site statistics</li>
+        </ul>
+        
+        <p>If you choose "Accept all," we will also use cookies and data to:</p>
+        <ul>
+            <li>Develop and improve new services</li>
+            <li>Deliver and measure the effectiveness of ads</li>
+            <li>Show personalized content, depending on your settings</li>
+        </ul>
+        
+        <p>If you choose "Reject all," we will not use cookies for these additional purposes.</p>
+        
+        <p>Non-personalized content and ads are influenced by things like the content you're currently viewing and your location. Personalized content and ads can be based on those things and your activity like Google searches and videos you watch on YouTube.</p>
+        
+        <div class="consent-buttons">
+            <button id="reject-all">Reject all</button>
+            <button id="accept-all">Accept all</button>
+        </div>
+        
+        <div class="privacy-links">
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/terms">Terms of Service</a>
+        </div>
+    </div>
+    
+    <script>
+        // Mock consent page behavior
+        document.getElementById('accept-all').addEventListener('click', function() {
+            // Simulate redirect after consent
+            window.location.href = '/redirected-content';
+        });
+        
+        document.getElementById('reject-all').addEventListener('click', function() {
+            // Simulate redirect after rejection
+            window.location.href = '/limited-content';
+        });
+    </script>
+</body>
+</html>
