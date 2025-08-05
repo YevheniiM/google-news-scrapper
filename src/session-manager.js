@@ -47,10 +47,13 @@ export class SessionManager {
     isConsentPage(html, url) {
         if (!html) return false;
 
+        // Ensure html is a string
+        const htmlStr = typeof html === 'string' ? html : String(html);
+
         // Check for consent page indicators
         const indicators = CONFIG.SESSION.CONSENT_PAGE_INDICATORS;
-        const htmlLower = html.toLowerCase();
-        
+        const htmlLower = htmlStr.toLowerCase();
+
         return indicators.some(indicator => htmlLower.includes(indicator.toLowerCase()));
     }
 

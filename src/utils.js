@@ -224,34 +224,54 @@ export function cleanText(text) {
  */
 export function decodeGoogleNewsUrl(googleNewsUrl) {
     try {
-        // Google News URLs contain base64 encoded data
         // Extract the article ID from the URL
         const match = googleNewsUrl.match(/articles\/([^?]+)/);
         if (!match) return googleNewsUrl;
 
         const articleId = match[1];
 
-        // Try to decode the base64 data
+        // Google News uses a specific encoding format
+        // Try multiple decoding approaches
+
+        // Approach 1: Direct base64 decode
         try {
             const decoded = Buffer.from(articleId, 'base64').toString('utf-8');
-
-            // Look for URLs in the decoded data
-            const urlMatch = decoded.match(/https?:\/\/[^\s"'<>]+/);
-            if (urlMatch) {
+            const urlMatch = decoded.match(/https?:\/\/[^\s"'<>\x00-\x1f]+/);
+            if (urlMatch && !urlMatch[0].includes('google.com')) {
                 return urlMatch[0];
             }
-        } catch (decodeError) {
-            // If base64 decode fails, try URL decoding
-            try {
-                const urlDecoded = decodeURIComponent(articleId);
-                const urlMatch = urlDecoded.match(/https?:\/\/[^\s"'<>]+/);
-                if (urlMatch) {
-                    return urlMatch[0];
-                }
-            } catch (urlDecodeError) {
-                // If all decoding fails, return original URL
-                return googleNewsUrl;
+        } catch (e) {
+            // Continue to next approach
+        }
+
+        // Approach 2: Try to decode as URL-safe base64
+        try {
+            const urlSafeDecoded = articleId.replace(/-/g, '+').replace(/_/g, '/');
+            const decoded = Buffer.from(urlSafeDecoded, 'base64').toString('utf-8');
+            const urlMatch = decoded.match(/https?:\/\/[^\s"'<>\x00-\x1f]+/);
+            if (urlMatch && !urlMatch[0].includes('google.com')) {
+                return urlMatch[0];
             }
+        } catch (e) {
+            // Continue to next approach
+        }
+
+        // Approach 3: Try to extract from the encoded string using patterns
+        try {
+            // Look for common URL patterns in the encoded string
+            const patterns = [
+                /CBM[a-zA-Z0-9+\/=]*([a-zA-Z0-9+\/=]*)(https?:\/\/[^\s"'<>]+)/,
+                /(https?:\/\/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s"'<>]*)/
+            ];
+
+            for (const pattern of patterns) {
+                const match = articleId.match(pattern);
+                if (match && match[1] && !match[1].includes('google.com')) {
+                    return match[1];
+                }
+            }
+        } catch (e) {
+            // Continue
         }
 
         return googleNewsUrl;
