@@ -1,0 +1,85 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "Google News Article",
+  "type": "object",
+  "description": "Structured data for a scraped Google News article with full text content and metadata",
+  "properties": {
+    "query": {
+      "type": "string",
+      "title": "Search Query",
+      "description": "The original search query used to find this article"
+    },
+    "title": {
+      "type": "string", 
+      "title": "Article Title",
+      "description": "The full title of the news article including source attribution"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "title": "Article URL", 
+      "description": "The URL of the article (may be Google News URL or resolved article URL)"
+    },
+    "source": {
+      "type": "string",
+      "title": "News Source",
+      "description": "The name of the news publication or website"
+    },
+    "publishedAt": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Publication Date",
+      "description": "When the article was published (ISO 8601 format)"
+    },
+    "author": {
+      "type": "string",
+      "title": "Author",
+      "description": "The author of the article (if available)"
+    },
+    "text": {
+      "type": "string",
+      "title": "Article Text",
+      "description": "The main text content of the article extracted from RSS feed or article page"
+    },
+    "description": {
+      "type": "string", 
+      "title": "Article Description",
+      "description": "A brief description or summary of the article"
+    },
+    "images": {
+      "type": "array",
+      "title": "Images",
+      "description": "Array of image URLs found in the article",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "title": "Tags",
+      "description": "Relevant tags or keywords for the article",
+      "items": {
+        "type": "string"
+      }
+    },
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "The language of the article content"
+    },
+    "scrapedAt": {
+      "type": "string",
+      "format": "date-time", 
+      "title": "Scraped At",
+      "description": "When this article was scraped (ISO 8601 format)"
+    },
+    "extractionSuccess": {
+      "type": "boolean",
+      "title": "Extraction Success",
+      "description": "Whether the content extraction was successful"
+    }
+  },
+  "required": ["query", "title", "url", "scrapedAt", "extractionSuccess"],
+  "additionalProperties": false
+}

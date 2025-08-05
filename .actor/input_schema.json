@@ -90,22 +90,6 @@
       "default": false,
       "example": false,
       "editor": "checkbox"
-    },
-    "proxyConfiguration": {
-      "title": "Proxy Configuration",
-      "type": "object",
-      "description": "Proxy settings for the scraper to avoid rate limiting and blocks",
-      "prefill": {
-        "useApifyProxy": true
-      },
-      "properties": {
-        "useApifyProxy": {
-          "title": "Use Apify Proxy",
-          "type": "boolean",
-          "description": "Use Apify's proxy service for better reliability",
-          "default": true
-        }
-      }
     }
   },
   "required": ["query"],

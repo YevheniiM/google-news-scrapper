@@ -1,7 +1,37 @@
 {
 	"actorSpecification": 1,
 	"name": "google-news-scraper",
-	"version": "0.0",
+	"title": "Google News Scraper",
+	"description": "Scrape Google News articles with full text extraction. Search for any topic and get structured data including titles, content, sources, dates, and metadata.",
+	"version": "1.0",
+	"meta": {
+		"templateId": "javascript-node",
+		"isPublic": true
+	},
+	"author": {
+		"name": "Yevhenii Molodtsov",
+		"email": "example@example.com"
+	},
+	"categories": ["SCRAPER"],
+	"keywords": ["news", "google-news", "articles", "scraping", "journalism", "media"],
 	"buildTag": "latest",
+	"dockerfile": "./Dockerfile",
+	"readme": "./README.md",
+	"input": "input_schema.json",
+	"storages": {
+		"dataset": {
+			"actorSpecification": 1,
+			"title": "Google News Articles",
+			"description": "Scraped articles from Google News with full text content and metadata",
+			"views": {
+				"overview": {
+					"title": "Overview",
+					"transformation": {
+						"fields": ["title", "source", "publishedAt", "url", "text"]
+					}
+				}
+			}
+		}
+	},
 	"environmentVariables": {}
 }
