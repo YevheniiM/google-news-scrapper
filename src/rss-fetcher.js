@@ -167,12 +167,9 @@ export class RssFetcher {
                 await this.fetchWithRegionalVariations(query, language, region, maxItems);
             }
 
-            // Strategy 3: Try related search terms if still not enough
-            if (this.articles.size < maxItems) {
-                await this.fetchWithRelatedQueries(query, language, region, maxItems);
-            }
+            // Strategy 3: Skip related queries - user wants exact query only
 
-            // Strategy 4: Try broader time ranges if still not enough
+            // Strategy 3: Try broader time ranges if still not enough
             if (this.articles.size < maxItems) {
                 await this.fetchWithTimeVariations(query, language, region, maxItems);
             }
@@ -217,36 +214,7 @@ export class RssFetcher {
         }
     }
 
-    /**
-     * Fetch articles using related search queries to expand results
-     * @param {string} query - Original search query
-     * @param {string} language - Language code
-     * @param {string} region - Region code
-     * @param {number} maxItems - Maximum items to collect
-     */
-    async fetchWithRelatedQueries(query, language, region, maxItems) {
-        log.info('Trying related queries to get more articles...');
 
-        const relatedQueries = this.generateRelatedQueries(query);
-
-        for (const relatedQuery of relatedQueries) {
-            if (this.articles.size >= maxItems) break;
-
-            log.info(`Trying related query: "${relatedQuery}"`);
-            const feedUrl = buildFeedUrl(relatedQuery, language, region);
-
-            try {
-                const items = await this.fetchFeed(feedUrl);
-                const newItemsCount = this.processRssItems(items, maxItems);
-                log.info(`Query "${relatedQuery}": ${newItemsCount} new items, total: ${this.articles.size}`);
-
-                // Rate limiting between query requests
-                await sleep(CONFIG.RSS.RATE_LIMIT_DELAY * 2); // Longer delay for different queries
-            } catch (error) {
-                log.debug(`Failed to fetch with query "${relatedQuery}": ${error.message}`);
-            }
-        }
-    }
 
     /**
      * Fetch articles using time-based variations
@@ -323,36 +291,7 @@ export class RssFetcher {
         return variations.slice(0, 3);
     }
 
-    /**
-     * Generate related search queries to expand results
-     * @param {string} originalQuery - Original search query
-     * @returns {Array} Array of related queries
-     */
-    generateRelatedQueries(originalQuery) {
-        const queries = [];
-        const words = originalQuery.toLowerCase().split(/\s+/);
 
-        // If query has multiple words, try individual important words
-        if (words.length > 1) {
-            // Find longer words (likely more important)
-            const importantWords = words.filter(word => word.length > 3);
-
-            for (const word of importantWords.slice(0, 2)) { // Limit to 2 words
-                queries.push(word);
-            }
-
-            // Try combinations of words
-            if (words.length >= 2) {
-                queries.push(words.slice(0, 2).join(' ')); // First two words
-                if (words.length >= 3) {
-                    queries.push(words.slice(-2).join(' ')); // Last two words
-                }
-            }
-        }
-
-        // Limit to 3 related queries to avoid too many requests
-        return queries.slice(0, 3);
-    }
 
     /**
      * Try multiple RSS endpoints and search variations to maximize article collection
