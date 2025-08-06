@@ -30,11 +30,14 @@ export class AdvancedContentExtractor {
     extractWithReadability(html, url = '') {
         try {
             log.debug('Attempting extraction with Mozilla Readability');
-            
-            // Create a JSDOM instance
-            const dom = new JSDOM(html, { url });
+
+            // STEP 1: Pre-clean HTML before Readability processing
+            const cleanedHtml = this.preCleanHtml(html);
+
+            // Create a JSDOM instance with cleaned HTML
+            const dom = new JSDOM(cleanedHtml, { url });
             const document = dom.window.document;
-            
+
             // Use Readability to extract content
             const reader = new Readability(document, {
                 debug: false,
@@ -43,23 +46,26 @@ export class AdvancedContentExtractor {
                 charThreshold: 500,
                 classesToPreserve: ['caption', 'credit']
             });
-            
+
             const article = reader.parse();
-            
+
             if (!article) {
                 log.debug('Readability failed to parse article');
                 return { success: false };
             }
-            
-            // Extract additional metadata
+
+            // STEP 2: Post-process the extracted text to remove any remaining unwanted content
+            const cleanedText = this.postProcessText(article.textContent || '');
+
+            // Extract additional metadata from original HTML
             const $ = cheerio.load(html);
             const author = this.extractAuthor($);
             const publishDate = this.extractPublishDate($);
             const images = this.extractAllImages($, null, url);
-            
+
             return {
                 title: cleanText(article.title || ''),
-                text: cleanText(article.textContent || ''),
+                text: cleanedText,
                 content: article.content || '', // HTML content for image extraction
                 author: author,
                 date: publishDate,
@@ -67,7 +73,7 @@ export class AdvancedContentExtractor {
                 images: images,
                 tags: [],
                 lang: document.documentElement.lang || 'unknown',
-                success: !!(article.title && article.textContent && article.textContent.length > 300),
+                success: !!(article.title && cleanedText.length > 300),
                 extractionMethod: 'readability'
             };
         } catch (error) {
@@ -85,15 +91,14 @@ export class AdvancedContentExtractor {
     extractWithCustomSelectors(html, url = '') {
         try {
             log.debug('Attempting extraction with custom selectors');
-            
-            const $ = cheerio.load(html);
-            
-            // Remove unwanted elements first
-            this.removeUnwantedElements($);
-            
+
+            // Pre-clean HTML first
+            const cleanedHtml = this.preCleanHtml(html);
+            const $ = cheerio.load(cleanedHtml);
+
             // Extract title
             const title = this.extractTitle($);
-            
+
             // Extract main content using news-specific selectors
             const contentSelectors = [
                 'article .article-body',
@@ -110,10 +115,10 @@ export class AdvancedContentExtractor {
                 '.story-body__inner',
                 '.article-wrap .article-body'
             ];
-            
+
             let mainContent = '';
             let contentElement = null;
-            
+
             for (const selector of contentSelectors) {
                 const element = $(selector).first();
                 if (element.length > 0) {
@@ -124,7 +129,7 @@ export class AdvancedContentExtractor {
                     }
                 }
             }
-            
+
             // If no specific content found, try broader selectors
             if (mainContent.length < 300) {
                 const broadSelectors = ['article', '.main-content', '#content', '.content'];
@@ -139,18 +144,22 @@ export class AdvancedContentExtractor {
                     }
                 }
             }
-            
-            // Extract images from content AND meta tags
-            const images = this.extractAllImages($, contentElement, url);
-            
-            // Extract metadata
-            const author = this.extractAuthor($);
-            const publishDate = this.extractPublishDate($);
-            const description = this.extractDescription($);
-            
+
+            // Post-process the extracted text
+            const cleanedText = this.postProcessText(mainContent);
+
+            // Extract images from original HTML (not cleaned) for better image detection
+            const $original = cheerio.load(html);
+            const images = this.extractAllImages($original, null, url);
+
+            // Extract metadata from original HTML
+            const author = this.extractAuthor($original);
+            const publishDate = this.extractPublishDate($original);
+            const description = this.extractDescription($original);
+
             return {
                 title: cleanText(title),
-                text: cleanText(mainContent),
+                text: cleanedText,
                 content: contentElement ? contentElement.html() : '',
                 author: author,
                 date: publishDate,
@@ -158,7 +167,7 @@ export class AdvancedContentExtractor {
                 images: images,
                 tags: [],
                 lang: $('html').attr('lang') || 'unknown',
-                success: !!(title && mainContent.length > 300),
+                success: !!(title && cleanedText.length > 300),
                 extractionMethod: 'custom-selectors'
             };
         } catch (error) {
@@ -176,12 +185,11 @@ export class AdvancedContentExtractor {
     extractWithTextDensity(html, url = '') {
         try {
             log.debug('Attempting extraction with text density analysis');
-            
-            const $ = cheerio.load(html);
-            
-            // Remove unwanted elements
-            this.removeUnwantedElements($);
-            
+
+            // Pre-clean HTML first
+            const cleanedHtml = this.preCleanHtml(html);
+            const $ = cheerio.load(cleanedHtml);
+
             // Find the element with highest text density
             let bestElement = null;
             let bestScore = 0;
@@ -214,14 +222,20 @@ export class AdvancedContentExtractor {
             
             const title = this.extractTitle($);
             const mainContent = bestElement.text().trim();
-            const images = this.extractAllImages($, bestElement, url);
-            const author = this.extractAuthor($);
-            const publishDate = this.extractPublishDate($);
-            const description = this.extractDescription($);
-            
+
+            // Post-process the extracted text
+            const cleanedText = this.postProcessText(mainContent);
+
+            // Extract metadata from original HTML for better accuracy
+            const $original = cheerio.load(html);
+            const images = this.extractAllImages($original, null, url);
+            const author = this.extractAuthor($original);
+            const publishDate = this.extractPublishDate($original);
+            const description = this.extractDescription($original);
+
             return {
                 title: cleanText(title),
-                text: cleanText(mainContent),
+                text: cleanedText,
                 content: bestElement.html(),
                 author: author,
                 date: publishDate,
@@ -229,7 +243,7 @@ export class AdvancedContentExtractor {
                 images: images,
                 tags: [],
                 lang: $('html').attr('lang') || 'unknown',
-                success: !!(title && mainContent.length > 300),
+                success: !!(title && cleanedText.length > 300),
                 extractionMethod: 'text-density'
             };
         } catch (error) {
@@ -242,6 +256,126 @@ export class AdvancedContentExtractor {
      * Remove unwanted elements from the DOM
      * @param {object} $ - Cheerio instance
      */
+    /**
+     * Pre-clean HTML before passing to Readability
+     * This removes JavaScript, ads, and other unwanted content that might pollute the text extraction
+     * @param {string} html - Raw HTML content
+     * @returns {string} Cleaned HTML
+     */
+    preCleanHtml(html) {
+        const $ = cheerio.load(html);
+
+        // Remove script tags and their content (this is the main culprit)
+        $('script').remove();
+
+        // Remove style tags and their content
+        $('style').remove();
+
+        // Remove common unwanted elements
+        const unwantedSelectors = [
+            'nav', 'header', 'footer', 'aside',
+            '.advertisement', '.ad', '.ads', '.social', '.share',
+            '.comments', '.comment', '.related', '.sidebar',
+            '.newsletter', '.subscribe', '.popup', '.modal',
+            '.cookie', '.gdpr', '.consent', '.privacy',
+            '[class*="ad-"]', '[id*="ad-"]', '[class*="ads-"]',
+            '[class*="advertisement"]', '[class*="sponsored"]',
+            '.tracking', '.analytics', '.gtm', '.facebook-pixel',
+            // Sky Sports specific unwanted elements
+            '.sdc-site-au', '.oddschecker', '.teads', '.mpu',
+            '[data-module*="ad"]', '[data-module*="Ad"]'
+        ];
+
+        unwantedSelectors.forEach(selector => {
+            $(selector).remove();
+        });
+
+        // Remove elements with suspicious content patterns
+        $('*').each((_, element) => {
+            const $el = $(element);
+            const text = $el.text();
+
+            // Remove elements containing JavaScript-like patterns
+            if (text.includes('document.currentScript') ||
+                text.includes('window.') ||
+                text.includes('var ') ||
+                text.includes('function(') ||
+                text.includes('oddscheckerJs') ||
+                text.includes('sdc.checkConsent')) {
+                $el.remove();
+            }
+        });
+
+        return $.html();
+    }
+
+    /**
+     * Post-process extracted text to remove any remaining unwanted content
+     * @param {string} text - Raw extracted text
+     * @returns {string} Cleaned text
+     */
+    postProcessText(text) {
+        if (!text) return '';
+
+        // Remove JavaScript code patterns that might have slipped through
+        const jsPatterns = [
+            // Remove document.currentScript patterns
+            /document\.currentScript\.parentNode\.config\s*=\s*\{[^}]*\}[^}]*\}/g,
+
+            // Remove var declarations and function definitions
+            /var\s+\w+\s*=\s*function\s*\([^)]*\)\s*\{[^}]*\}/g,
+            /function\s*\([^)]*\)\s*\{[^}]*\}/g,
+
+            // Remove window object assignments
+            /window\.\w+\s*=\s*\{[^}]*\}/g,
+
+            // Remove oddschecker and analytics code
+            /oddscheckerJs[^;]*;/g,
+            /window\.sdc\.checkConsent[^;]*;/g,
+            /window\.ocEnv\s*=\s*\{[^}]*\}/g,
+
+            // Remove document.write calls
+            /document\.write\([^)]*\)/g,
+
+            // Remove CSS-in-JS patterns
+            /\.sdc-[^{]*\{[^}]*\}/g,
+
+            // Remove cookie consent messages
+            /This content is provided by [^.]*\. To show you this content[^.]*\./g,
+            /You can use the buttons below to amend your preferences[^.]*\./g,
+            /Enable Cookies Allow Cookies Once/g,
+            /Unfortunately we have been unable to verify if you have consented[^.]*\./g,
+        ];
+
+        let cleanedText = text;
+        jsPatterns.forEach(pattern => {
+            cleanedText = cleanedText.replace(pattern, '');
+        });
+
+        // Remove common boilerplate patterns
+        const boilerplatePatterns = [
+            /Please use Chrome browser for a more accessible video player/g,
+            /Got Sky\? Watch your EFL team on the Sky Sports app/g,
+            /Not got Sky\? Stream your EFL team with no contract/g,
+            /Watch EVERY SINGLE Championship fixture[^.]*\./g,
+            /SUPER 6 RETURNS[^.]*\./g,
+            /Around Sky Other Sports[^.]*$/g,
+            /Upgrade to Sky Sports[^.]*$/g,
+        ];
+
+        boilerplatePatterns.forEach(pattern => {
+            cleanedText = cleanedText.replace(pattern, '');
+        });
+
+        // Clean up whitespace and formatting
+        cleanedText = cleanedText
+            .replace(/\s+/g, ' ') // Replace multiple whitespace with single space
+            .replace(/\n\s*\n/g, '\n') // Replace multiple newlines with single newline
+            .trim();
+
+        return cleanText(cleanedText);
+    }
+
     removeUnwantedElements($) {
         const unwantedSelectors = [
             'script', 'style', 'nav', 'header', 'footer', 'aside',
@@ -250,7 +384,7 @@ export class AdvancedContentExtractor {
             '.newsletter', '.subscribe', '.popup', '.modal',
             '.cookie', '.gdpr', '[class*="ad-"]', '[id*="ad-"]'
         ];
-        
+
         unwantedSelectors.forEach(selector => {
             $(selector).remove();
         });
