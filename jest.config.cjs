@@ -2,6 +2,9 @@ module.exports = {
   // Test environment
   testEnvironment: 'node',
 
+  // Enable ES modules support
+  extensionsToTreatAsEsm: ['.js'],
+
   // Test file patterns
   testMatch: [
     '**/tests/**/*.test.js',
@@ -9,7 +12,7 @@ module.exports = {
   ],
 
   // Coverage configuration
-  collectCoverage: false, // Disable for now to focus on functionality
+  collectCoverage: false,
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   collectCoverageFrom: [
@@ -27,7 +30,7 @@ module.exports = {
   // Verbose output
   verbose: true,
 
-  // Transform configuration
+  // Transform configuration - empty for ES modules
   transform: {},
 
   // Module file extensions

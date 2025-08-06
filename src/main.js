@@ -1,7 +1,7 @@
 /**
- * Google News Scraper - Main Entry Point
- * 
- * A comprehensive Google News scraper that extracts articles with full text,
+ * Google News Scraper - Optimized Main Entry Point
+ *
+ * A streamlined Google News scraper that extracts articles with full text,
  * images, and metadata using RSS feeds and article crawling.
  */
 
@@ -10,131 +10,108 @@ import { log } from 'crawlee';
 import { CONFIG } from './config.js';
 import { RssFetcher } from './rss-fetcher.js';
 import { ArticleCrawler } from './article-crawler.js';
-import { errorHandling } from './error-handling-integration.js';
+import { errorHandling } from './error-handling.js';
 import { monitoring } from './monitoring.js';
 import { costMonitor } from './cost-monitor.js';
 
-// Initialize Actor
-await Actor.init();
+/**
+ * Get and validate input
+ * @returns {Promise<object>} Validated input
+ */
+async function getInput() {
+    let input = await Actor.getInput();
 
-// Set logging level
-log.setLevel(log.LEVELS[CONFIG.LOGGING.LEVEL]);
+    if (!input || !input.query) {
+        // Fallback to reading INPUT.json for local testing
+        try {
+            const fs = await import('fs');
+            const inputJson = fs.readFileSync('./INPUT.json', 'utf8');
+            input = JSON.parse(inputJson);
+            log.info('Using INPUT.json for local testing');
+        } catch (error) {
+            throw new Error('Input must contain a "query" field. Please provide input via Actor input or create INPUT.json file.');
+        }
+    }
+
+    // Final validation
+    if (!input || !input.query) {
+        throw new Error('Input must contain a "query" field');
+    }
+
+    return input;
+}
 
 /**
  * Main execution function
  */
 async function main() {
-    try {
-        // Initialize error handling system
-        await errorHandling.initialize();
-        log.info('Error handling system initialized');
+    // Get and validate input
+    const input = await getInput();
 
-        // Get input from Actor or fallback to INPUT.json for local testing
-        let input = await Actor.getInput();
+    // Extract parameters with defaults
+    const {
+        query,
+        region = CONFIG.RSS.DEFAULT_REGION,
+        language = CONFIG.RSS.DEFAULT_LANGUAGE,
+        maxItems = 0,
+        dateFrom = null,
+        dateTo = null,
+        useBrowser = CONFIG.COST_OPTIMIZATION?.USE_BROWSER_BY_DEFAULT ?? false,
+        lightweightMode = false,
+        costOptimized = false,
+    } = input;
 
-        if (!input || !input.query) {
-            // Fallback to reading INPUT.json directly for local testing
-            try {
-                const fs = await import('fs');
-                const inputJson = fs.readFileSync('./INPUT.json', 'utf8');
-                input = JSON.parse(inputJson);
-                log.info('Using INPUT.json for local testing');
-            } catch (error) {
-                log.error('Failed to read INPUT.json:', error.message);
-                const errorMsg = 'Input must contain a "query" field. Please provide input via Actor input or create INPUT.json file.';
-                log.error(errorMsg);
-                throw new Error(errorMsg);
-            }
+    // Apply cost optimization settings
+    if (lightweightMode || costOptimized) {
+        log.info('🚀 Running in cost-optimized mode');
+        if (lightweightMode) {
+            CONFIG.CRAWLER.MAX_CONCURRENCY = 1;
+            CONFIG.PROXY.RESIDENTIAL_ENABLED = false;
+            CONFIG.IMAGE.SKIP_VALIDATION = true;
         }
-
-        // Validate input
-        if (!input || !input.query) {
-            const errorMsg = 'Input must contain a "query" field';
-            log.error(errorMsg);
-            throw new Error(errorMsg);
-        }
-
-        // Set defaults with COST OPTIMIZATION
-        const {
-            query,
-            region = CONFIG.RSS.DEFAULT_REGION,
-            language = CONFIG.RSS.DEFAULT_LANGUAGE,
-            maxItems = 0,
-            dateFrom = null,
-            dateTo = null,
-            useBrowser = CONFIG.COST_OPTIMIZATION?.USE_BROWSER_BY_DEFAULT ?? false, // Default to false for cost savings
-            lightweightMode = false, // New parameter for maximum cost optimization
-            costOptimized = false, // New parameter for cost-aware mode
-        } = input;
-
-        // COST OPTIMIZATION: Apply lightweight settings if requested
-        if (lightweightMode || costOptimized) {
-            log.info('🚀 Running in cost-optimized mode');
-            // Override settings for maximum cost efficiency
-            if (lightweightMode) {
-                CONFIG.CRAWLER.MAX_CONCURRENCY = 1;
-                CONFIG.PROXY.RESIDENTIAL_ENABLED = false;
-                CONFIG.IMAGE.SKIP_VALIDATION = true;
-            }
-        }
-
-        log.info('Google News Scraper starting', {
-            query,
-            region,
-            language,
-            maxItems,
-            dateFrom,
-            dateTo,
-            useBrowser,
-        });
-
-        // Configure proxies with COST OPTIMIZATION
-        const googleProxy = await createProxyConfiguration(['GOOGLE_SERP'], region);
-
-        // COST OPTIMIZATION: Use datacenter proxies by default, fallback to residential
-        const proxyGroups = CONFIG.PROXY.RESIDENTIAL_ENABLED ? ['RESIDENTIAL'] : ['DATACENTER'];
-        const articleProxy = await createProxyConfiguration(proxyGroups, region);
-
-        // Stage A: RSS Feed Processing
-        log.info('=== Stage A: RSS Feed Processing ===');
-        const rssFetcher = new RssFetcher(googleProxy);
-        const articles = await rssFetcher.fetchRssItems({
-            query,
-            region,
-            language,
-            maxItems,
-            dateFrom,
-            dateTo,
-        });
-
-        if (articles.size === 0) {
-            log.warning('No articles found in RSS feeds');
-            await Actor.exit();
-            return;
-        }
-
-        // Stage B: Article Crawling
-        log.info('=== Stage B: Article Crawling ===');
-        const articleCrawler = new ArticleCrawler(articleProxy, useBrowser);
-        await articleCrawler.crawlArticles(Array.from(articles.values()), query);
-
-        // Final statistics with cost monitoring
-        const failedUrls = articleCrawler.getFailedUrls();
-        log.info('Scraping completed', {
-            totalArticlesFound: articles.size,
-            failedArticles: failedUrls.length,
-            successRate: `${(((articles.size - failedUrls.length) / articles.size) * 100).toFixed(1)}%`,
-        });
-
-        // COST MONITORING: Log cost summary and save report
-        costMonitor.logCostSummary();
-        await costMonitor.saveCostReport();
-
-    } catch (error) {
-        const errorMessage = error.message || String(error);
-        log.error('Main execution failed:', errorMessage);
-        throw error;
     }
+
+    log.info('Google News Scraper starting', {
+        query, region, language, maxItems, dateFrom, dateTo, useBrowser,
+    });
+
+    // Configure proxies
+    const googleProxy = await createProxyConfiguration(['GOOGLE_SERP'], region);
+    const proxyGroups = CONFIG.PROXY.RESIDENTIAL_ENABLED ? ['RESIDENTIAL'] : ['DATACENTER'];
+    const articleProxy = await createProxyConfiguration(proxyGroups, region);
+
+    // Stage A: RSS Feed Processing with Smart Batching
+    log.info('=== Stage A: RSS Feed Processing ===');
+    const rssFetcher = new RssFetcher(googleProxy);
+
+    // Stage B: Article Crawling with Quality-Based Continuation
+    log.info('=== Stage B: Article Crawling with Smart maxItems Handling ===');
+    const articleCrawler = new ArticleCrawler(articleProxy, useBrowser);
+
+    // Implement smart maxItems handling - continue until we get enough quality articles
+    await articleCrawler.crawlWithQualityTarget({
+        rssFetcher,
+        query,
+        region,
+        language,
+        maxItems,
+        dateFrom,
+        dateTo
+    });
+
+    // Final statistics
+    const failedUrls = articleCrawler.getFailedUrls();
+    const successRate = (((articles.size - failedUrls.length) / articles.size) * 100).toFixed(1);
+
+    log.info('Scraping completed', {
+        totalArticlesFound: articles.size,
+        failedArticles: failedUrls.length,
+        successRate: `${successRate}%`,
+    });
+
+    // Cost monitoring
+    costMonitor.logCostSummary();
+    await costMonitor.saveCostReport();
 }
 
 /**
@@ -163,34 +140,37 @@ async function createProxyConfiguration(groups, countryCode) {
     }
 }
 
-// Run main function
-try {
-    await main();
+// Initialize and run
+async function run() {
+    await Actor.init();
+    log.setLevel(log.LEVELS[CONFIG.LOGGING.LEVEL]);
 
-    // Generate final health report
-    const healthStatus = errorHandling.getHealthStatus();
-    log.info('Final health status:', healthStatus.overall);
-
-    // Generate monitoring report
-    await monitoring.generateReport();
-
-    log.info('🎉 Google News Scraper completed successfully');
-} catch (error) {
-    const errorMessage = error.message || String(error);
-    log.error('💥 Google News Scraper failed:', errorMessage);
-
-    // Generate error report
     try {
-        const errorReport = await errorHandling.generateErrorReport();
-        log.error('Error report:', errorReport.summary);
-        await Actor.setValue('ERROR_REPORT', errorReport);
-    } catch (reportError) {
-        log.debug('Failed to generate error report:', reportError.message);
-    }
+        await main();
 
-    process.exit(1);
-} finally {
-    // Shutdown error handling system
-    await errorHandling.shutdown();
-    await Actor.exit();
+        // Generate reports
+        const healthStatus = errorHandling.getHealthStatus();
+        log.info('Final health status:', healthStatus.overall.status);
+        await monitoring.generateReport();
+
+        log.info('🎉 Google News Scraper completed successfully');
+    } catch (error) {
+        log.error('💥 Google News Scraper failed:', error.message);
+
+        // Save error report
+        try {
+            const errorReport = await errorHandling.generateErrorReport();
+            await Actor.setValue('ERROR_REPORT', errorReport);
+        } catch (reportError) {
+            log.debug('Failed to generate error report:', reportError.message);
+        }
+
+        process.exit(1);
+    } finally {
+        errorHandling.cleanup();
+        await Actor.exit();
+    }
 }
+
+// Start the scraper
+run().catch(console.error);

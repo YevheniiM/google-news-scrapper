@@ -1,24 +1,30 @@
 /**
- * Optimized Proxy Manager - COST EFFICIENT VERSION
- * Uses datacenter proxies by default, only escalates to residential when needed
+ * Unified Proxy Manager - Combines optimized and residential proxy management
+ * Cost-efficient proxy strategy with smart fallback mechanisms
  */
 
 import { log } from 'crawlee';
 import { CONFIG } from './config.js';
 
 /**
- * Optimized Proxy Manager class - cost-effective proxy strategy
+ * Unified Proxy Manager class with cost optimization and smart proxy selection
  */
-export class OptimizedProxyManager {
+export class ProxyManager {
     constructor(proxyConfiguration = null) {
         this.proxyConfiguration = proxyConfiguration;
         this.currentProxy = null;
+        this.proxyRotationTimer = null;
         this.proxyUsageCount = 0;
         this.proxyErrorCount = 0;
         this.lastRotation = Date.now();
         
         // Track domains that require residential proxies
-        this.residentialRequiredDomains = new Set();
+        this.residentialRequiredDomains = new Set([
+            'google.com',
+            'news.google.com',
+            'consent.google.com',
+            // Add more domains that typically require residential proxies
+        ]);
         
         // Track successful datacenter proxy usage
         this.datacenterSuccessDomains = new Set();
@@ -31,8 +37,15 @@ export class OptimizedProxyManager {
             datacenterRequests: 0,
             residentialRequests: 0,
             totalRequests: 0,
-            costSavings: 0 // Estimated cost savings from using datacenter
+            costSavings: 0,
+            errors: 0,
+            rotations: 0
         };
+
+        // Initialize proxy rotation if enabled
+        if (CONFIG.PROXY.RESIDENTIAL_ENABLED && this.proxyConfiguration) {
+            this.startProxyRotation();
+        }
     }
 
     /**
@@ -63,7 +76,8 @@ export class OptimizedProxyManager {
             }
             
         } catch (error) {
-            log.error('Failed to get optimized proxy config:', error.message);
+            log.error('Failed to get proxy config:', error.message);
+            this.stats.errors++;
             return {};
         }
     }
@@ -96,8 +110,12 @@ export class OptimizedProxyManager {
             
             // Track successful datacenter usage
             if (targetUrl) {
-                const domain = new URL(targetUrl).hostname;
-                this.datacenterSuccessDomains.add(domain);
+                try {
+                    const domain = new URL(targetUrl).hostname;
+                    this.datacenterSuccessDomains.add(domain);
+                } catch (e) {
+                    // Invalid URL, ignore
+                }
             }
 
             return {
@@ -115,11 +133,16 @@ export class OptimizedProxyManager {
         } catch (error) {
             log.debug('Datacenter proxy failed:', error.message);
             this.proxyErrorCount++;
+            this.stats.errors++;
             
             // Mark domain as potentially needing residential proxy
             if (targetUrl) {
-                const domain = new URL(targetUrl).hostname;
-                this.residentialRequiredDomains.add(domain);
+                try {
+                    const domain = new URL(targetUrl).hostname;
+                    this.residentialRequiredDomains.add(domain);
+                } catch (e) {
+                    // Invalid URL, ignore
+                }
             }
             
             return {};
@@ -167,6 +190,7 @@ export class OptimizedProxyManager {
         } catch (error) {
             log.error('Residential proxy failed:', error.message);
             this.proxyErrorCount++;
+            this.stats.errors++;
             return {};
         }
     }
@@ -178,7 +202,7 @@ export class OptimizedProxyManager {
      */
     shouldUseResidentialProxy(targetUrl) {
         if (!targetUrl) return false;
-        
+
         try {
             const domain = new URL(targetUrl).hostname;
             
@@ -187,27 +211,26 @@ export class OptimizedProxyManager {
                 return true;
             }
             
-            // Check if domain has been successful with datacenter proxy
-            if (this.datacenterSuccessDomains.has(domain)) {
-                return false;
+            // Check if datacenter proxy has failed for this domain before
+            if (this.residentialRequiredDomains.has(domain)) {
+                return true;
             }
             
-            // Known domains that typically require residential proxies
-            const residentialRequiredPatterns = [
-                'cloudflare',
+            // Check for specific patterns that typically require residential proxies
+            const residentialPatterns = [
+                'google.com',
+                'consent',
                 'captcha',
-                'bot-detection',
-                'access-denied'
+                'cloudflare',
+                'bot-protection'
             ];
             
-            const requiresResidential = residentialRequiredPatterns.some(pattern => 
-                domain.includes(pattern)
+            return residentialPatterns.some(pattern => 
+                domain.includes(pattern) || targetUrl.includes(pattern)
             );
             
-            return requiresResidential;
-            
         } catch (error) {
-            log.debug('Error checking residential proxy need:', error.message);
+            log.debug('Error checking residential proxy requirement:', error.message);
             return false;
         }
     }
@@ -245,6 +268,7 @@ export class OptimizedProxyManager {
             this.proxyErrorCount = 0;
             this.lastRotation = Date.now();
             this.currentTier = tier;
+            this.stats.rotations++;
             
             if (this.proxyConfiguration) {
                 this.currentProxy = await this.proxyConfiguration.newUrl();
@@ -253,30 +277,71 @@ export class OptimizedProxyManager {
 
         } catch (error) {
             log.error('Failed to rotate proxy:', error.message);
+            this.stats.errors++;
         }
     }
 
     /**
-     * Report proxy error for domain learning
+     * Report proxy error for domain learning and rotation decisions
      * @param {string} targetUrl - URL that failed
-     * @param {string} errorType - Type of error
+     * @param {Error} error - Error that occurred
+     * @param {number} statusCode - HTTP status code
      */
-    reportProxyError(targetUrl, errorType = 'unknown') {
+    reportProxyError(targetUrl, error, statusCode = null) {
         this.proxyErrorCount++;
-        
+        this.stats.errors++;
+
+        log.debug(`Proxy error reported: ${error.message} (status: ${statusCode})`);
+
         if (targetUrl) {
             try {
                 const domain = new URL(targetUrl).hostname;
-                
+
                 // If datacenter proxy failed, mark domain for residential
                 if (this.currentTier === 'datacenter') {
                     this.residentialRequiredDomains.add(domain);
-                    log.debug(`Domain ${domain} marked for residential proxy due to ${errorType}`);
+                    log.debug(`Domain ${domain} marked for residential proxy due to error`);
                 }
-                
-            } catch (error) {
-                log.debug('Error reporting proxy error:', error.message);
+
+            } catch (e) {
+                log.debug('Error reporting proxy error:', e.message);
             }
+        }
+
+        // Force rotation on certain errors
+        const forceRotationCodes = [403, 429, 503, 407]; // Forbidden, Rate Limited, Service Unavailable, Proxy Auth Required
+
+        if (statusCode && forceRotationCodes.includes(statusCode)) {
+            log.warning(`Force rotating proxy due to status code: ${statusCode}`);
+            this.rotateProxy(this.currentTier);
+        }
+    }
+
+    /**
+     * Start automatic proxy rotation
+     */
+    startProxyRotation() {
+        if (this.proxyRotationTimer) {
+            clearInterval(this.proxyRotationTimer);
+        }
+
+        this.proxyRotationTimer = setInterval(async () => {
+            if (this.shouldRotateProxy()) {
+                await this.rotateProxy(this.currentTier);
+            }
+        }, CONFIG.PROXY.RESIDENTIAL_ROTATION_INTERVAL);
+
+        log.debug('Started automatic proxy rotation');
+    }
+
+    /**
+     * Stop automatic proxy rotation
+     */
+    stopProxyRotation() {
+        if (this.proxyRotationTimer) {
+            clearInterval(this.proxyRotationTimer);
+            this.proxyRotationTimer = null;
+            log.debug('Stopped automatic proxy rotation');
         }
     }
 
@@ -287,16 +352,41 @@ export class OptimizedProxyManager {
     getCostStats() {
         const residentialCostMultiplier = 3; // Residential proxies typically cost 3x more
         const estimatedSavings = this.stats.datacenterRequests * (residentialCostMultiplier - 1);
-        
+
         return {
             ...this.stats,
             costSavings: estimatedSavings,
-            datacenterPercentage: this.stats.totalRequests > 0 
+            datacenterPercentage: this.stats.totalRequests > 0
                 ? (this.stats.datacenterRequests / this.stats.totalRequests * 100).toFixed(1)
                 : 0,
-            residentialPercentage: this.stats.totalRequests > 0 
+            residentialPercentage: this.stats.totalRequests > 0
                 ? (this.stats.residentialRequests / this.stats.totalRequests * 100).toFixed(1)
-                : 0
+                : 0,
+            currentTier: this.currentTier,
+            currentProxy: this.currentProxy ? 'Active' : 'None',
+            usageCount: this.proxyUsageCount,
+            errorCount: this.proxyErrorCount,
+            lastRotation: new Date(this.lastRotation).toISOString(),
+            timeSinceRotation: Date.now() - this.lastRotation,
+            shouldRotate: this.shouldRotateProxy()
         };
+    }
+
+    /**
+     * Get proxy statistics (alias for getCostStats for compatibility)
+     * @returns {object} Proxy usage statistics
+     */
+    getStats() {
+        return this.getCostStats();
+    }
+
+    /**
+     * Cleanup resources
+     */
+    cleanup() {
+        this.stopProxyRotation();
+        this.currentProxy = null;
+        this.residentialRequiredDomains.clear();
+        this.datacenterSuccessDomains.clear();
     }
 }

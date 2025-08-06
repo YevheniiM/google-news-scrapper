@@ -11,11 +11,11 @@ import { CONFIG } from './config.js';
 import { buildFeedUrl, getDateRanges, sleep } from './utils.js';
 import { SessionManager } from './session-manager.js';
 import { RetryManager } from './retry-manager.js';
-import { ErrorHandler } from './error-handler.js';
+import { errorHandling } from './error-handling.js';
 import { circuitBreakerManager } from './circuit-breaker.js';
 import { monitoring } from './monitoring.js';
 import { gracefulDegradation } from './graceful-degradation.js';
-import { errorRecovery } from './error-recovery.js';
+// Error recovery is now part of the unified error handling system
 
 /**
  * RSS Fetcher class for Google News
@@ -28,7 +28,8 @@ export class RssFetcher {
 
         // Error handling components
         this.retryManager = new RetryManager();
-        this.errorHandler = new ErrorHandler();
+        // Use the global error handling instance
+        this.errorHandler = errorHandling;
 
         this.xmlParser = new XMLParser({
             ignoreAttributes: false,
@@ -36,6 +37,14 @@ export class RssFetcher {
             parseAttributeValue: false,
             trimValues: true,
         });
+    }
+
+    /**
+     * Reset the articles collection for a new crawling session
+     */
+    resetArticles() {
+        this.articles.clear();
+        log.info('RSS articles collection reset for new session');
     }
 
     /**
@@ -127,14 +136,17 @@ export class RssFetcher {
     }
 
     /**
-     * Fetch RSS items with date slicing for large queries
+     * Fetch RSS items with enhanced strategies for large queries
      * @param {object} input - Input parameters
      * @returns {Promise<Map>} Map of collected articles
      */
     async fetchRssItems(input) {
         const { query, region, language, maxItems, dateFrom, dateTo } = input;
 
-        log.info(`Starting RSS collection for query: "${query}"`);
+        log.info(`Starting RSS collection for query: "${query}" (target: ${maxItems || 'unlimited'})`);
+
+        // Note: Don't clear articles here as we might be called multiple times
+        // for the same crawling session to build up more articles
 
         // Initial fetch without date slicing
         const initialFeedUrl = buildFeedUrl(query, language, region);
@@ -143,17 +155,279 @@ export class RssFetcher {
 
         log.info(`Initial fetch: ${newItemsCount} new items, total: ${this.articles.size}`);
 
-        // Temporarily disable date slicing as Google News RSS doesn't support date filters
-        // TODO: Implement alternative strategies to get more items if needed
-        // if (maxItems > 0 && this.articles.size < maxItems) {
-        //     await this.fetchWithDateSlicing(query, language, region, maxItems, dateFrom, dateTo);
-        // }
+        // If we need more articles and haven't reached the limit, try alternative strategies
+        if (maxItems > 0 && this.articles.size < maxItems) {
+            log.info(`Need more articles (${this.articles.size}/${maxItems}), trying alternative strategies...`);
+
+            // Strategy 1: Try multiple RSS endpoints and variations
+            await this.fetchWithMultipleEndpoints(query, language, region, maxItems);
+
+            // Strategy 2: Try different regional variations of the same query
+            if (this.articles.size < maxItems) {
+                await this.fetchWithRegionalVariations(query, language, region, maxItems);
+            }
+
+            // Strategy 3: Try related search terms if still not enough
+            if (this.articles.size < maxItems) {
+                await this.fetchWithRelatedQueries(query, language, region, maxItems);
+            }
+
+            // Strategy 4: Try broader time ranges if still not enough
+            if (this.articles.size < maxItems) {
+                await this.fetchWithTimeVariations(query, language, region, maxItems);
+            }
+        }
 
         // Store progress
         await Actor.setValue(CONFIG.STORAGE.RSS_ITEMS_KEY, Array.from(this.articles.values()));
 
         log.info(`RSS collection completed. Total items: ${this.articles.size}`);
         return this.articles;
+    }
+
+    /**
+     * Fetch articles using regional variations to get more diverse results
+     * @param {string} query - Search query
+     * @param {string} language - Language code
+     * @param {string} region - Primary region code
+     * @param {number} maxItems - Maximum items to collect
+     */
+    async fetchWithRegionalVariations(query, language, region, maxItems) {
+        log.info('Trying regional variations to get more articles...');
+
+        // Define regional variations based on language
+        const regionalVariations = this.getRegionalVariations(region, language);
+
+        for (const altRegion of regionalVariations) {
+            if (this.articles.size >= maxItems) break;
+
+            log.info(`Trying region variation: ${altRegion}`);
+            const feedUrl = buildFeedUrl(query, language, altRegion);
+
+            try {
+                const items = await this.fetchFeed(feedUrl);
+                const newItemsCount = this.processRssItems(items, maxItems);
+                log.info(`Region ${altRegion}: ${newItemsCount} new items, total: ${this.articles.size}`);
+
+                // Rate limiting between regional requests
+                await sleep(CONFIG.RSS.RATE_LIMIT_DELAY);
+            } catch (error) {
+                log.debug(`Failed to fetch from region ${altRegion}: ${error.message}`);
+            }
+        }
+    }
+
+    /**
+     * Fetch articles using related search queries to expand results
+     * @param {string} query - Original search query
+     * @param {string} language - Language code
+     * @param {string} region - Region code
+     * @param {number} maxItems - Maximum items to collect
+     */
+    async fetchWithRelatedQueries(query, language, region, maxItems) {
+        log.info('Trying related queries to get more articles...');
+
+        const relatedQueries = this.generateRelatedQueries(query);
+
+        for (const relatedQuery of relatedQueries) {
+            if (this.articles.size >= maxItems) break;
+
+            log.info(`Trying related query: "${relatedQuery}"`);
+            const feedUrl = buildFeedUrl(relatedQuery, language, region);
+
+            try {
+                const items = await this.fetchFeed(feedUrl);
+                const newItemsCount = this.processRssItems(items, maxItems);
+                log.info(`Query "${relatedQuery}": ${newItemsCount} new items, total: ${this.articles.size}`);
+
+                // Rate limiting between query requests
+                await sleep(CONFIG.RSS.RATE_LIMIT_DELAY * 2); // Longer delay for different queries
+            } catch (error) {
+                log.debug(`Failed to fetch with query "${relatedQuery}": ${error.message}`);
+            }
+        }
+    }
+
+    /**
+     * Fetch articles using time-based variations
+     * @param {string} query - Search query
+     * @param {string} language - Language code
+     * @param {string} region - Region code
+     * @param {number} maxItems - Maximum items to collect
+     */
+    async fetchWithTimeVariations(query, language, region, maxItems) {
+        log.info('Trying time-based variations to get more articles...');
+
+        // Try different time-based URL parameters that might work with Google News
+        const timeVariations = [
+            '&when:1d',  // Last day
+            '&when:7d',  // Last week
+            '&when:1m',  // Last month
+            '&sort:date', // Sort by date
+            '&sort:relevance' // Sort by relevance
+        ];
+
+        for (const timeParam of timeVariations) {
+            if (this.articles.size >= maxItems) break;
+
+            log.info(`Trying time variation: ${timeParam}`);
+            const baseFeedUrl = buildFeedUrl(query, language, region);
+            const feedUrl = baseFeedUrl + timeParam;
+
+            try {
+                const items = await this.fetchFeed(feedUrl);
+                const newItemsCount = this.processRssItems(items, maxItems);
+                log.info(`Time variation ${timeParam}: ${newItemsCount} new items, total: ${this.articles.size}`);
+
+                // Rate limiting between time variation requests
+                await sleep(CONFIG.RSS.RATE_LIMIT_DELAY);
+            } catch (error) {
+                log.debug(`Failed to fetch with time variation ${timeParam}: ${error.message}`);
+            }
+        }
+    }
+
+    /**
+     * Get regional variations for expanding search
+     * @param {string} primaryRegion - Primary region code
+     * @param {string} language - Language code
+     * @returns {Array} Array of alternative region codes
+     */
+    getRegionalVariations(primaryRegion, language) {
+        const variations = [];
+
+        // Language-based regional variations
+        const regionMap = {
+            'en': ['US', 'GB', 'CA', 'AU', 'IN', 'ZA'],
+            'es': ['ES', 'MX', 'AR', 'CO', 'CL', 'PE'],
+            'fr': ['FR', 'CA', 'BE', 'CH', 'SN'],
+            'de': ['DE', 'AT', 'CH'],
+            'it': ['IT', 'CH'],
+            'pt': ['BR', 'PT'],
+            'ru': ['RU', 'BY', 'KZ'],
+            'ja': ['JP'],
+            'ko': ['KR'],
+            'zh': ['CN', 'TW', 'HK', 'SG']
+        };
+
+        const languageRegions = regionMap[language] || ['US', 'GB'];
+
+        // Add variations that are different from the primary region
+        for (const region of languageRegions) {
+            if (region !== primaryRegion && !variations.includes(region)) {
+                variations.push(region);
+            }
+        }
+
+        // Limit to 3 variations to avoid too many requests
+        return variations.slice(0, 3);
+    }
+
+    /**
+     * Generate related search queries to expand results
+     * @param {string} originalQuery - Original search query
+     * @returns {Array} Array of related queries
+     */
+    generateRelatedQueries(originalQuery) {
+        const queries = [];
+        const words = originalQuery.toLowerCase().split(/\s+/);
+
+        // If query has multiple words, try individual important words
+        if (words.length > 1) {
+            // Find longer words (likely more important)
+            const importantWords = words.filter(word => word.length > 3);
+
+            for (const word of importantWords.slice(0, 2)) { // Limit to 2 words
+                queries.push(word);
+            }
+
+            // Try combinations of words
+            if (words.length >= 2) {
+                queries.push(words.slice(0, 2).join(' ')); // First two words
+                if (words.length >= 3) {
+                    queries.push(words.slice(-2).join(' ')); // Last two words
+                }
+            }
+        }
+
+        // Limit to 3 related queries to avoid too many requests
+        return queries.slice(0, 3);
+    }
+
+    /**
+     * Try multiple RSS endpoints and search variations to maximize article collection
+     * @param {string} query - Search query
+     * @param {string} language - Language code
+     * @param {string} region - Region code
+     * @param {number} maxItems - Maximum items to collect
+     */
+    async fetchWithMultipleEndpoints(query, language, region, maxItems) {
+        log.info('Trying multiple RSS endpoints to get more articles...');
+
+        // Different Google News RSS endpoint variations
+        const endpointVariations = [
+            // Standard RSS feed
+            `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${language}&gl=${region}&ceid=${region}:${language}`,
+
+            // Try with different ceid formats
+            `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${language}&gl=${region}&ceid=${language}`,
+
+            // Try without ceid
+            `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${language}&gl=${region}`,
+
+            // Try with topic-based approach (if query matches common topics)
+            ...this.getTopicBasedUrls(query, language, region),
+        ];
+
+        for (const feedUrl of endpointVariations) {
+            if (this.articles.size >= maxItems) break;
+
+            log.info(`Trying endpoint variation: ${feedUrl}`);
+
+            try {
+                const items = await this.fetchFeed(feedUrl);
+                const newItemsCount = this.processRssItems(items, maxItems);
+                log.info(`Endpoint variation: ${newItemsCount} new items, total: ${this.articles.size}`);
+
+                // Rate limiting between endpoint requests
+                await sleep(CONFIG.RSS.RATE_LIMIT_DELAY);
+            } catch (error) {
+                log.debug(`Failed to fetch from endpoint variation: ${error.message}`);
+            }
+        }
+    }
+
+    /**
+     * Get topic-based RSS URLs if the query matches common news topics
+     * @param {string} query - Search query
+     * @param {string} language - Language code
+     * @param {string} region - Region code
+     * @returns {Array} Array of topic-based RSS URLs
+     */
+    getTopicBasedUrls(query, language, region) {
+        const urls = [];
+        const lowerQuery = query.toLowerCase();
+
+        // Map common query terms to Google News topics
+        const topicMap = {
+            'business': 'CAAqJggKIiBDQkFTRWdvSUwyMHZNRFZ4ZERBU0FtVnVHZ0pWVXlnQVAB',
+            'technology': 'CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp0Y1RjU0FtVnVHZ0pWVXlnQVAB',
+            'sports': 'CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp1ZEdvU0FtVnVHZ0pWVXlnQVAB',
+            'health': 'CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRFU0FtVnVLQUFQAQ',
+            'science': 'CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp0Y1RjU0FtVnVHZ0pWVXlnQVAB',
+            'entertainment': 'CAAqJggKIiBDQkFTRWdvSUwyMHZNREpxYW5RU0FtVnVHZ0pWVXlnQVAB',
+            'politics': 'CAAqIQgKIhtDQkFTRGdvSUwyMHZNRE41ZGpBU0FtVnVLQUFQAQ'
+        };
+
+        // Check if query contains topic keywords
+        for (const [topic, topicId] of Object.entries(topicMap)) {
+            if (lowerQuery.includes(topic)) {
+                urls.push(`https://news.google.com/rss/topics/${topicId}?hl=${language}&gl=${region}`);
+                break; // Only add one topic URL to avoid too many requests
+            }
+        }
+
+        return urls;
     }
 
     /**

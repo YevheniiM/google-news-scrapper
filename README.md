@@ -1,8 +1,8 @@
 # Google News Scraper
 
-A powerful and robust Apify actor that scrapes Google News articles with **full text extraction** and advanced content processing. Built for production use with comprehensive error handling, monitoring capabilities, and intelligent Google News redirect resolution.
+A streamlined and efficient Apify actor that scrapes Google News articles with **full text extraction** and intelligent content processing. Optimized for production use with unified architecture, cost-efficient operations, and smart content extraction.
 
-**✅ Now with working text extraction from Google News articles!**
+**✅ Fully optimized and production-ready!**
 
 ## 🚀 Features
 
@@ -29,15 +29,15 @@ A powerful and robust Apify actor that scrapes Google News articles with **full 
 - **🏥 Health Monitoring**: Real-time system health and error tracking
 - **🧹 Data Validation**: Input validation and output quality assurance
 
-## 🎉 Latest Updates (v1.0.0)
+## 🎉 Latest Updates (v2.0.0)
 
-**Major breakthrough in text extraction!** The scraper now successfully extracts meaningful text content from Google News articles:
+**Major architecture optimization!** The scraper has been completely streamlined for better performance and maintainability:
 
-- **✅ Fixed Google News URL handling**: Smart RSS feed data utilization instead of redirect resolution
-- **✅ 100% success rate**: All articles now process successfully with proper content
-- **✅ Real text extraction**: Articles now contain actual content from RSS feed descriptions
-- **✅ Rich metadata**: Complete article information including titles, sources, dates, and tags
-- **✅ Production ready**: Fully tested and deployed with comprehensive error handling
+- **✅ Unified Architecture**: Consolidated content extractors, proxy managers, and error handlers
+- **✅ Cost Optimized**: Smart resource usage with environment-aware configuration
+- **✅ Simplified Codebase**: Removed duplicate code and unnecessary complexity
+- **✅ Enhanced Performance**: Faster startup and improved resource efficiency
+- **✅ Production Ready**: Streamlined for production deployment with minimal overhead
 
 **Example output:**
 ```json

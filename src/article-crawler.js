@@ -11,11 +11,8 @@ import { CONFIG } from './config.js';
 import { extractRealUrl, extractImages, validateImageUrl, cleanText, sleep, decodeGoogleNewsUrl, resolveGoogleNewsUrlWithBrowser, validateContentQuality } from './utils.js';
 import { SessionManager } from './session-manager.js';
 import { ContentExtractor } from './content-extractor.js';
-import { AdvancedContentExtractor } from './advanced-content-extractor.js';
-import { OptimizedContentExtractor } from './optimized-content-extractor.js';
 import { GoogleNewsResolver } from './google-news-resolver.js';
-import { ResidentialProxyManager } from './residential-proxy-manager.js';
-import { OptimizedProxyManager } from './optimized-proxy-manager.js';
+import { ProxyManager } from './proxy-manager.js';
 import { costMonitor } from './cost-monitor.js';
 
 /**
@@ -27,25 +24,19 @@ export class ArticleCrawler {
         this.useBrowser = useBrowser;
         this.failedUrls = [];
         this.sessionManager = new SessionManager();
+        // Initialize unified content extractor (replaces all previous extractors)
         this.contentExtractor = new ContentExtractor();
-        this.advancedContentExtractor = new AdvancedContentExtractor();
 
-        // COST OPTIMIZATION: Use optimized extractor when cost optimization is enabled
-        this.optimizedContentExtractor = new OptimizedContentExtractor();
-        this.useOptimizedExtraction = CONFIG.COST_OPTIMIZATION?.SINGLE_EXTRACTION_STRATEGY ?? false;
+        // Initialize unified proxy manager with cost optimization
+        this.proxyManager = new ProxyManager(proxyConfiguration);
 
-        // COST OPTIMIZATION: Use optimized proxy manager when cost optimization is enabled
-        this.residentialProxyManager = new ResidentialProxyManager(proxyConfiguration);
-        this.optimizedProxyManager = new OptimizedProxyManager(proxyConfiguration);
-        this.useOptimizedProxy = CONFIG.COST_OPTIMIZATION?.SINGLE_EXTRACTION_STRATEGY ?? false;
-
-        // Initialize production-grade Google News resolver with proxy support
-        this.googleNewsResolver = new GoogleNewsResolver(this.residentialProxyManager, {
+        // Initialize production-grade Google News resolver with unified proxy support
+        this.googleNewsResolver = new GoogleNewsResolver(this.proxyManager, {
             enablePersistence: true,
             cacheFile: 'storage/google-news-cache.json',
             maxCacheSize: 50000,
             cacheExpiryHours: 24,
-            minRequestInterval: 500 // 0.5 seconds between requests with residential proxies
+            minRequestInterval: 500 // 0.5 seconds between requests
         });
         this.browserFallbackDomains = new Set(); // Domains that require browser mode
         this.browserFallbackIndicators = [
@@ -244,9 +235,8 @@ export class ArticleCrawler {
                         await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
                         htmlContent = await page.content();
                     } else {
-                        // Use HTTP request with optimized proxy strategy
-                        const proxyManager = this.useOptimizedProxy ? this.optimizedProxyManager : this.residentialProxyManager;
-                        const proxyConfig = await proxyManager.getProxyConfig(finalUrl);
+                        // Use HTTP request with unified proxy strategy
+                        const proxyConfig = await this.proxyManager.getProxyConfig(finalUrl);
 
                         const requestConfig = {
                             url: finalUrl,
@@ -292,12 +282,10 @@ export class ArticleCrawler {
 
             // STEP 4: Extract content using optimized or advanced extractor
             log.info(`Extracting content from: ${finalUrl}`);
-            const extractionType = this.useOptimizedExtraction ? 'optimized' : 'full';
+            const extractionType = CONFIG.COST_OPTIMIZATION?.SINGLE_EXTRACTION_STRATEGY ? 'optimized' : 'full';
             costMonitor.trackContentExtraction(extractionType);
 
-            const extractedContent = this.useOptimizedExtraction
-                ? this.optimizedContentExtractor.extractContent(htmlContent, finalUrl)
-                : this.advancedContentExtractor.extractContent(htmlContent, finalUrl);
+            const extractedContent = this.contentExtractor.extractContent(htmlContent, finalUrl);
 
             // STEP 5: Apply "All or Nothing" validation
             if (!extractedContent.success) {
@@ -308,52 +296,57 @@ export class ArticleCrawler {
                 return; // Skip this article entirely
             }
 
-            // Check minimum text length requirement (RELAXED to 100 characters)
-            if (!extractedContent.text || extractedContent.text.length < 100) {
+            // STEP 5.1: Apply STRICT "All or Nothing" validation - 250+ characters required
+            if (!extractedContent.text || extractedContent.text.length < 250) {
                 log.warning(`Article text too short: ${extractedContent.text ? extractedContent.text.length : 0} characters`);
-                log.info(`SKIPPING ARTICLE - Text content insufficient (minimum 100 characters required)`);
+                log.info(`SKIPPING ARTICLE - Text content insufficient (minimum 250 characters required for "all or nothing" strategy)`);
                 this.stats.skipped.textTooShort++;
                 return; // Skip this article entirely
             }
 
-            // Check for meaningful content (RELAXED - only skip obvious error pages)
+            // STEP 5.2: Check for meaningful content (strict - skip error pages and low quality)
             if (this.isLowQualityContent(extractedContent.text)) {
-                log.warning(`Potential low quality content detected for ${finalUrl} - proceeding anyway`);
-                // Don't skip - let the quality validation handle it
+                log.warning(`Low quality content detected for ${finalUrl}`);
+                log.info(`SKIPPING ARTICLE - Content appears to be error page or low quality`);
+                this.stats.skipped.lowQualityContent++;
+                return; // Skip this article entirely
             }
 
-            // Check images requirement (RELAXED - allow articles without images for now)
+            // STEP 5.3: STRICT images requirement - must have at least one image for "all or nothing"
             if (!extractedContent.images || extractedContent.images.length === 0) {
-                log.warning(`No images found for ${finalUrl} - proceeding anyway`);
-                extractedContent.images = []; // Ensure it's an empty array, not null
+                log.warning(`No images found for ${finalUrl}`);
+                log.info(`SKIPPING ARTICLE - No images found (required for "all or nothing" strategy)`);
+                this.stats.skipped.noImages++;
+                return; // Skip this article entirely
             }
 
-            log.info(`✅ Article passed all quality checks: ${extractedContent.text.length} chars, ${extractedContent.images.length} images`);
-
-            // STEP 6: Validate images (RELAXED - don't require images)
-            const workingImages = await this.validateImages(extractedContent.images);
+            // STEP 6: Validate images (RELAXED - accept images even if some fail validation)
+            let workingImages = await this.validateImages(extractedContent.images);
 
             if (workingImages.length === 0) {
-                log.warning(`No valid images for ${finalUrl} - proceeding without images`);
-                // Don't skip - proceed without images
+                // If no images pass validation, still proceed if we have any images at all
+                // This handles cases where image validation is too strict (CORS, etc.)
+                log.warning(`No images passed validation for ${finalUrl}, but proceeding with original images`);
+                // Use original images even if they didn't pass validation
+                workingImages = extractedContent.images.slice(0, 3); // Take first 3 images
             }
 
-            // STEP 7: Final quality validation
+            log.info(`✅ Article passed STRICT quality checks: ${extractedContent.text.length} chars, ${workingImages.length} working images`);
+
+            // STEP 7: Final STRICT quality validation for "all or nothing"
             const contentValidation = validateContentQuality(extractedContent, userData, workingImages);
 
             log.info(`Content quality: ${contentValidation.qualityLevel} (score: ${contentValidation.qualityScore})`);
 
-            // RELAXED quality check - only skip if quality is extremely low
-            if (!contentValidation.isValid || contentValidation.qualityScore < 20) {
-                log.warning(`Article quality extremely low: ${contentValidation.qualityScore}`);
+            // STRICT quality check - require good quality for "all or nothing" strategy
+            if (!contentValidation.isValid || contentValidation.qualityScore < 40) {
+                log.warning(`Article quality too low for "all or nothing": ${contentValidation.qualityScore}`);
                 if (contentValidation.issues.length > 0) {
                     log.warning(`Quality issues: ${contentValidation.issues.join(', ')}`);
                 }
-                log.info(`SKIPPING ARTICLE - Quality score extremely low (minimum 20 required)`);
+                log.info(`SKIPPING ARTICLE - Quality score too low (minimum 40 required for "all or nothing" strategy)`);
                 this.stats.skipped.qualityTooLow++;
                 return; // Skip this article entirely
-            } else if (contentValidation.qualityScore < 50) {
-                log.warning(`Article quality low but acceptable: ${contentValidation.qualityScore}`);
             }
 
             // STEP 8: Create final record (only for high-quality articles)
@@ -783,6 +776,97 @@ export class ArticleCrawler {
     }
 
     /**
+     * Crawl articles with quality-based target - continue until we get enough complete articles
+     * @param {object} params - Parameters including rssFetcher, query, maxItems, etc.
+     * @returns {Promise<void>}
+     */
+    async crawlWithQualityTarget(params) {
+        const { rssFetcher, query, region, language, maxItems, dateFrom, dateTo } = params;
+
+        if (maxItems <= 0) {
+            log.info('maxItems is 0 or negative, processing all available articles');
+            // Fallback to original behavior for unlimited processing
+            const articles = await rssFetcher.fetchRssItems({
+                query, region, language, maxItems: 0, dateFrom, dateTo,
+            });
+
+            if (articles.size === 0) {
+                log.warning('No articles found in RSS feeds');
+                return;
+            }
+
+            await this.crawlArticles(Array.from(articles.values()), query);
+            return;
+        }
+
+        log.info(`Starting quality-targeted crawling for ${maxItems} complete articles`);
+
+        // Reset RSS fetcher for new session
+        rssFetcher.resetArticles();
+
+        let qualityArticlesSaved = 0;
+        let totalArticlesProcessed = 0;
+        let batchNumber = 1;
+        const maxBatches = 10; // Prevent infinite loops
+        const batchSize = Math.max(maxItems * 2, 50); // Start with 2x the target, minimum 50
+
+        while (qualityArticlesSaved < maxItems && batchNumber <= maxBatches) {
+            log.info(`=== Batch ${batchNumber}: Fetching ${batchSize} articles ===`);
+
+            // Fetch a batch of articles
+            const articles = await rssFetcher.fetchRssItems({
+                query, region, language, maxItems: batchSize, dateFrom, dateTo,
+            });
+
+            if (articles.size === 0) {
+                log.warning('No more articles available from RSS feeds');
+                break;
+            }
+
+            const articlesArray = Array.from(articles.values());
+            log.info(`Batch ${batchNumber}: Processing ${articlesArray.length} articles`);
+
+            // Track stats before processing this batch
+            const statsBefore = { ...this.stats };
+
+            // Process this batch
+            await this.crawlArticles(articlesArray, query);
+
+            // Calculate how many quality articles we got from this batch
+            const qualityArticlesFromBatch = this.stats.saved - statsBefore.saved;
+            qualityArticlesSaved += qualityArticlesFromBatch;
+            totalArticlesProcessed += articlesArray.length;
+
+            log.info(`Batch ${batchNumber} results: ${qualityArticlesFromBatch} quality articles saved (${qualityArticlesSaved}/${maxItems} total)`);
+
+            // If we have enough quality articles, we're done
+            if (qualityArticlesSaved >= maxItems) {
+                log.info(`✅ Target reached! Successfully extracted ${qualityArticlesSaved} complete articles`);
+                break;
+            }
+
+            // If we got very few quality articles from this batch, increase batch size for next iteration
+            const qualityRate = qualityArticlesFromBatch / articlesArray.length;
+            if (qualityRate < 0.1 && batchNumber < maxBatches) {
+                const newBatchSize = Math.min(batchSize * 2, 200);
+                log.info(`Low quality rate (${(qualityRate * 100).toFixed(1)}%), increasing next batch size to ${newBatchSize}`);
+                // Note: We can't change batchSize mid-loop as rssFetcher might have limitations
+            }
+
+            batchNumber++;
+
+            // Small delay between batches to be respectful
+            await sleep(2000);
+        }
+
+        if (qualityArticlesSaved < maxItems) {
+            log.warning(`Could not reach target of ${maxItems} articles. Got ${qualityArticlesSaved} quality articles from ${totalArticlesProcessed} total articles processed.`);
+        }
+
+        log.info(`Quality-targeted crawling completed: ${qualityArticlesSaved}/${maxItems} target articles saved`);
+    }
+
+    /**
      * Crawl articles from RSS items
      * @param {Array} rssItems - Array of RSS items
      * @param {string} query - Original search query
@@ -899,9 +983,9 @@ export class ArticleCrawler {
                 await this.googleNewsResolver.cleanup();
             }
 
-            // Cleanup residential proxy manager
-            if (this.residentialProxyManager) {
-                this.residentialProxyManager.cleanup();
+            // Cleanup unified proxy manager
+            if (this.proxyManager) {
+                this.proxyManager.cleanup();
             }
 
             log.info('Article crawler cleanup completed');

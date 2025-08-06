@@ -118,67 +118,7 @@ export async function validateImageUrl(imageUrl, gotScraping = null) {
     }
 }
 
-/**
- * Validate image URL using pattern matching (no HTTP requests)
- * @param {string} imageUrl - Image URL to validate
- * @returns {boolean} True if image URL looks valid
- */
-export function validateImageUrlByPattern(imageUrl) {
-    if (!imageUrl || typeof imageUrl !== 'string') {
-        return false;
-    }
 
-    // Must be HTTP/HTTPS URL
-    if (!imageUrl.startsWith('http')) {
-        return false;
-    }
-
-    // Check for valid image extensions
-    const validExtensions = CONFIG.IMAGE.ALLOWED_EXTENSIONS;
-    const hasValidExtension = validExtensions.some(ext =>
-        imageUrl.toLowerCase().includes(ext)
-    );
-
-    // Skip obvious non-images
-    const invalidPatterns = [
-        '1x1',
-        'pixel',
-        'spacer',
-        'blank',
-        'transparent',
-        'tracking',
-        'analytics',
-        'beacon',
-        'counter'
-    ];
-
-    const hasInvalidPattern = invalidPatterns.some(pattern =>
-        imageUrl.toLowerCase().includes(pattern)
-    );
-
-    // Check for common image hosting domains (likely to be valid)
-    const trustedDomains = [
-        'imgur.com',
-        'cloudinary.com',
-        'amazonaws.com',
-        'googleusercontent.com',
-        'fbcdn.net',
-        'twimg.com',
-        'ytimg.com',
-        'staticflickr.com',
-        'unsplash.com',
-        'pexels.com'
-    ];
-
-    const isTrustedDomain = trustedDomains.some(domain =>
-        imageUrl.includes(domain)
-    );
-
-    // Return true if:
-    // - Has valid extension OR is from trusted domain
-    // - AND doesn't have invalid patterns
-    return (hasValidExtension || isTrustedDomain) && !hasInvalidPattern;
-}
 
 /**
  * Extract and deduplicate images from various sources
@@ -397,6 +337,54 @@ export function sleep(ms) {
 export function formatDate(date) {
     return date.toISOString().split('T')[0];
 }
+
+/**
+ * Validate image URL using pattern matching (no HTTP requests)
+ * @param {string} imageUrl - Image URL to validate
+ * @returns {boolean} True if image URL looks valid
+ */
+export function validateImageUrlByPattern(imageUrl) {
+    if (!imageUrl || typeof imageUrl !== 'string') {
+        return false;
+    }
+
+    // Must be HTTP/HTTPS URL
+    if (!imageUrl.startsWith('http')) {
+        return false;
+    }
+
+    // Check for valid image extensions
+    const validExtensions = CONFIG.IMAGE.ALLOWED_EXTENSIONS;
+    const hasValidExtension = validExtensions.some(ext =>
+        imageUrl.toLowerCase().includes(ext)
+    );
+
+    // Skip obvious non-images
+    const invalidPatterns = [
+        '1x1', 'pixel', 'spacer', 'blank', 'transparent',
+        'tracking', 'analytics', 'beacon', 'counter'
+    ];
+
+    const hasInvalidPattern = invalidPatterns.some(pattern =>
+        imageUrl.toLowerCase().includes(pattern)
+    );
+
+    // Check for common image hosting domains (likely to be valid)
+    const trustedDomains = [
+        'imgur.com', 'cloudinary.com', 'amazonaws.com', 'googleusercontent.com',
+        'fbcdn.net', 'twimg.com', 'ytimg.com', 'staticflickr.com',
+        'unsplash.com', 'pexels.com'
+    ];
+
+    const isTrustedDomain = trustedDomains.some(domain =>
+        imageUrl.includes(domain)
+    );
+
+    // Return true if has valid extension OR is from trusted domain AND doesn't have invalid patterns
+    return (hasValidExtension || isTrustedDomain) && !hasInvalidPattern;
+}
+
+
 
 /**
  * Get date range for slicing large queries
