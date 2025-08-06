@@ -13,12 +13,12 @@ export const CONFIG = {
         RATE_LIMIT_DELAY: 200, // ms between RSS requests
     },
 
-    // Article crawling configuration
+    // Article crawling configuration - OPTIMIZED FOR COST EFFICIENCY
     CRAWLER: {
-        MAX_CONCURRENCY: 10,
-        REQUEST_TIMEOUT: 60000,
-        MAX_RETRIES: 2,
-        RATE_LIMIT_DELAY: 100, // ms between article requests
+        MAX_CONCURRENCY: 3, // Reduced from 10 to save resources
+        REQUEST_TIMEOUT: 30000, // Reduced from 60s to 30s
+        MAX_RETRIES: 1, // Reduced from 2 to 1 retry
+        RATE_LIMIT_DELAY: 300, // Increased from 100ms to 300ms for better rate limiting
         USER_AGENTS: [
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -28,22 +28,22 @@ export const CONFIG = {
         DEFAULT_USER_AGENT: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
 
-    // Proxy configuration
+    // Proxy configuration - OPTIMIZED FOR COST EFFICIENCY
     PROXY: {
         GOOGLE_SERP_GROUP: 'GOOGLE_SERP',
         RESIDENTIAL_GROUP: 'RESIDENTIAL',
         DATACENTER_GROUP: 'DATACENTER',
-        SESSION_MAX_USAGE: 5,
-        SESSION_MAX_ERROR_SCORE: 3,
-        // Residential proxy settings for bypassing anti-bot measures
-        RESIDENTIAL_ENABLED: true,
-        RESIDENTIAL_COUNTRIES: ['US', 'GB', 'CA', 'AU'],
+        SESSION_MAX_USAGE: 10, // Increased from 5 to use sessions longer
+        SESSION_MAX_ERROR_SCORE: 5, // Increased tolerance to avoid frequent rotation
+        // Residential proxy settings - DISABLED BY DEFAULT FOR COST SAVINGS
+        RESIDENTIAL_ENABLED: false, // Changed from true - use datacenter first
+        RESIDENTIAL_COUNTRIES: ['US'], // Reduced to single country
         RESIDENTIAL_STICKY_SESSION: true,
-        RESIDENTIAL_ROTATION_INTERVAL: 300000, // 5 minutes
+        RESIDENTIAL_ROTATION_INTERVAL: 600000, // Increased to 10 minutes
         // Fallback proxy settings
         DATACENTER_FALLBACK: true,
-        PROXY_TIMEOUT: 30000,
-        MAX_PROXY_RETRIES: 3,
+        PROXY_TIMEOUT: 20000, // Reduced from 30s to 20s
+        MAX_PROXY_RETRIES: 2, // Reduced from 3 to 2
     },
 
     // Session management configuration
@@ -63,12 +63,13 @@ export const CONFIG = {
         ],
     },
 
-    // Image validation configuration
+    // Image validation configuration - OPTIMIZED FOR COST EFFICIENCY
     IMAGE: {
-        VALIDATION_TIMEOUT: 15000,
-        MAX_CONCURRENT_VALIDATIONS: 5,
+        VALIDATION_TIMEOUT: 5000, // Reduced from 15s to 5s
+        MAX_CONCURRENT_VALIDATIONS: 2, // Reduced from 5 to 2
         ALLOWED_EXTENSIONS: ['.jpg', '.jpeg', '.png', '.webp', '.gif'],
         MIN_SIZE: 100, // minimum width/height in pixels
+        SKIP_VALIDATION: true, // NEW: Skip expensive HTTP validation by default
     },
 
     // Date range configuration
@@ -107,6 +108,25 @@ export const CONFIG = {
         SUCCESS_THRESHOLD: 3,
         TIMEOUT: 60000, // 1 minute
         MONITOR_WINDOW: 300000, // 5 minutes
+    },
+
+    // COST OPTIMIZATION SETTINGS
+    COST_OPTIMIZATION: {
+        // Browser usage - most expensive resource
+        USE_BROWSER_BY_DEFAULT: false, // Changed from true - only use when necessary
+        BROWSER_DETECTION_ENABLED: true, // Smart detection for JS-heavy sites
+
+        // Content extraction optimization
+        SINGLE_EXTRACTION_STRATEGY: true, // Use only the best strategy, not all
+        SKIP_CONTENT_VALIDATION: false, // Keep validation but make it faster
+
+        // Resource limits
+        MAX_MEMORY_USAGE_MB: 512, // Limit memory usage
+        MAX_EXECUTION_TIME_MS: 300000, // 5 minutes max execution
+
+        // Cost tracking
+        ENABLE_COST_TRACKING: true,
+        COST_ALERT_THRESHOLD: 0.50, // Alert when approaching $0.50
     },
 
     // Error handling configuration

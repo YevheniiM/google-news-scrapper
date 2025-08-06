@@ -12,6 +12,7 @@ import { RssFetcher } from './rss-fetcher.js';
 import { ArticleCrawler } from './article-crawler.js';
 import { errorHandling } from './error-handling-integration.js';
 import { monitoring } from './monitoring.js';
+import { costMonitor } from './cost-monitor.js';
 
 // Initialize Actor
 await Actor.init();
@@ -53,7 +54,7 @@ async function main() {
             throw new Error(errorMsg);
         }
 
-        // Set defaults
+        // Set defaults with COST OPTIMIZATION
         const {
             query,
             region = CONFIG.RSS.DEFAULT_REGION,
@@ -61,8 +62,21 @@ async function main() {
             maxItems = 0,
             dateFrom = null,
             dateTo = null,
-            useBrowser = false,
+            useBrowser = CONFIG.COST_OPTIMIZATION?.USE_BROWSER_BY_DEFAULT ?? false, // Default to false for cost savings
+            lightweightMode = false, // New parameter for maximum cost optimization
+            costOptimized = false, // New parameter for cost-aware mode
         } = input;
+
+        // COST OPTIMIZATION: Apply lightweight settings if requested
+        if (lightweightMode || costOptimized) {
+            log.info('🚀 Running in cost-optimized mode');
+            // Override settings for maximum cost efficiency
+            if (lightweightMode) {
+                CONFIG.CRAWLER.MAX_CONCURRENCY = 1;
+                CONFIG.PROXY.RESIDENTIAL_ENABLED = false;
+                CONFIG.IMAGE.SKIP_VALIDATION = true;
+            }
+        }
 
         log.info('Google News Scraper starting', {
             query,
@@ -74,9 +88,12 @@ async function main() {
             useBrowser,
         });
 
-        // Configure proxies
+        // Configure proxies with COST OPTIMIZATION
         const googleProxy = await createProxyConfiguration(['GOOGLE_SERP'], region);
-        const articleProxy = await createProxyConfiguration(['RESIDENTIAL'], region);
+
+        // COST OPTIMIZATION: Use datacenter proxies by default, fallback to residential
+        const proxyGroups = CONFIG.PROXY.RESIDENTIAL_ENABLED ? ['RESIDENTIAL'] : ['DATACENTER'];
+        const articleProxy = await createProxyConfiguration(proxyGroups, region);
 
         // Stage A: RSS Feed Processing
         log.info('=== Stage A: RSS Feed Processing ===');
@@ -101,13 +118,17 @@ async function main() {
         const articleCrawler = new ArticleCrawler(articleProxy, useBrowser);
         await articleCrawler.crawlArticles(Array.from(articles.values()), query);
 
-        // Final statistics
+        // Final statistics with cost monitoring
         const failedUrls = articleCrawler.getFailedUrls();
         log.info('Scraping completed', {
             totalArticlesFound: articles.size,
             failedArticles: failedUrls.length,
             successRate: `${(((articles.size - failedUrls.length) / articles.size) * 100).toFixed(1)}%`,
         });
+
+        // COST MONITORING: Log cost summary and save report
+        costMonitor.logCostSummary();
+        await costMonitor.saveCostReport();
 
     } catch (error) {
         const errorMessage = error.message || String(error);

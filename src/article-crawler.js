@@ -12,8 +12,11 @@ import { extractRealUrl, extractImages, validateImageUrl, cleanText, sleep, deco
 import { SessionManager } from './session-manager.js';
 import { ContentExtractor } from './content-extractor.js';
 import { AdvancedContentExtractor } from './advanced-content-extractor.js';
+import { OptimizedContentExtractor } from './optimized-content-extractor.js';
 import { GoogleNewsResolver } from './google-news-resolver.js';
 import { ResidentialProxyManager } from './residential-proxy-manager.js';
+import { OptimizedProxyManager } from './optimized-proxy-manager.js';
+import { costMonitor } from './cost-monitor.js';
 
 /**
  * Article Crawler class
@@ -26,7 +29,15 @@ export class ArticleCrawler {
         this.sessionManager = new SessionManager();
         this.contentExtractor = new ContentExtractor();
         this.advancedContentExtractor = new AdvancedContentExtractor();
+
+        // COST OPTIMIZATION: Use optimized extractor when cost optimization is enabled
+        this.optimizedContentExtractor = new OptimizedContentExtractor();
+        this.useOptimizedExtraction = CONFIG.COST_OPTIMIZATION?.SINGLE_EXTRACTION_STRATEGY ?? false;
+
+        // COST OPTIMIZATION: Use optimized proxy manager when cost optimization is enabled
         this.residentialProxyManager = new ResidentialProxyManager(proxyConfiguration);
+        this.optimizedProxyManager = new OptimizedProxyManager(proxyConfiguration);
+        this.useOptimizedProxy = CONFIG.COST_OPTIMIZATION?.SINGLE_EXTRACTION_STRATEGY ?? false;
 
         // Initialize production-grade Google News resolver with proxy support
         this.googleNewsResolver = new GoogleNewsResolver(this.residentialProxyManager, {
@@ -45,7 +56,26 @@ export class ArticleCrawler {
             'cloudflare',
             'please wait',
             'checking your browser',
+            'bot detection',
+            'access denied',
+            'blocked',
         ];
+
+        // COST OPTIMIZATION: Known domains that work well without browser
+        this.httpOnlyDomains = new Set([
+            'reuters.com',
+            'apnews.com',
+            'bbc.com',
+            'cnn.com',
+            'theguardian.com',
+            'npr.org',
+            'abcnews.go.com',
+            'cbsnews.com',
+            'nbcnews.com',
+            'usatoday.com',
+            'washingtonpost.com', // Often works with proper headers
+            'nytimes.com', // Sometimes works
+        ]);
 
         // Statistics for "all or nothing" strategy
         this.stats = {
@@ -66,7 +96,7 @@ export class ArticleCrawler {
     }
 
     /**
-     * Check if browser mode is needed for a URL or content
+     * Check if browser mode is needed for a URL or content - COST OPTIMIZED
      * @param {string} url - URL to check
      * @param {string} html - HTML content to analyze
      * @returns {boolean} True if browser mode is recommended
@@ -75,9 +105,21 @@ export class ArticleCrawler {
         try {
             const domain = new URL(url).hostname;
 
+            // COST OPTIMIZATION: Skip browser mode if disabled globally
+            if (CONFIG.COST_OPTIMIZATION?.USE_BROWSER_BY_DEFAULT === false &&
+                !CONFIG.COST_OPTIMIZATION?.BROWSER_DETECTION_ENABLED) {
+                return false;
+            }
+
             // Google News articles always require browser mode
             if (url.includes('news.google.com/articles/')) {
                 return true;
+            }
+
+            // COST OPTIMIZATION: Check if domain is known to work with HTTP only
+            if (this.httpOnlyDomains.has(domain)) {
+                log.debug(`Domain ${domain} known to work without browser mode`);
+                return false;
             }
 
             // Check if domain is already marked for browser mode
@@ -96,6 +138,14 @@ export class ArticleCrawler {
                     this.browserFallbackDomains.add(domain);
                     log.info(`Domain ${domain} marked for browser mode fallback`);
                     return true;
+                }
+
+                // COST OPTIMIZATION: Check if content looks complete without JS
+                const textLength = html.replace(/<[^>]*>/g, '').trim().length;
+                if (textLength > 1000) {
+                    log.debug(`Domain ${domain} has sufficient content without browser mode`);
+                    this.httpOnlyDomains.add(domain); // Cache for future requests
+                    return false;
                 }
             }
 
@@ -190,11 +240,13 @@ export class ArticleCrawler {
 
                     if (this.useBrowser && page) {
                         // Use browser to fetch content (handles JavaScript)
+                        costMonitor.trackBrowserRequest();
                         await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
                         htmlContent = await page.content();
                     } else {
-                        // Use HTTP request with residential proxy
-                        const proxyConfig = await this.residentialProxyManager.getProxyConfig(finalUrl);
+                        // Use HTTP request with optimized proxy strategy
+                        const proxyManager = this.useOptimizedProxy ? this.optimizedProxyManager : this.residentialProxyManager;
+                        const proxyConfig = await proxyManager.getProxyConfig(finalUrl);
 
                         const requestConfig = {
                             url: finalUrl,
@@ -213,9 +265,11 @@ export class ArticleCrawler {
                         };
 
                         if (proxyConfig.proxyUrl) {
-                            log.debug(`Using residential proxy for: ${finalUrl}`);
+                            const proxyType = this.useOptimizedProxy ? 'optimized' : 'residential';
+                            log.debug(`Using ${proxyType} proxy for: ${finalUrl}`);
                         }
 
+                        costMonitor.trackHttpRequest();
                         const response = await gotScraping(requestConfig);
                         htmlContent = response.body;
                     }
@@ -236,15 +290,21 @@ export class ArticleCrawler {
                 hasConsentPage = true;
             }
 
-            // STEP 4: Extract content using advanced content extractor
+            // STEP 4: Extract content using optimized or advanced extractor
             log.info(`Extracting content from: ${finalUrl}`);
-            const extractedContent = this.advancedContentExtractor.extractContent(htmlContent, finalUrl);
+            const extractionType = this.useOptimizedExtraction ? 'optimized' : 'full';
+            costMonitor.trackContentExtraction(extractionType);
+
+            const extractedContent = this.useOptimizedExtraction
+                ? this.optimizedContentExtractor.extractContent(htmlContent, finalUrl)
+                : this.advancedContentExtractor.extractContent(htmlContent, finalUrl);
 
             // STEP 5: Apply "All or Nothing" validation
             if (!extractedContent.success) {
                 log.warning(`Content extraction failed for ${finalUrl}`);
                 log.info(`SKIPPING ARTICLE - Content extraction failed`);
                 this.stats.skipped.extractionFailed++;
+                costMonitor.trackArticleProcessing(false); // Track skipped article
                 return; // Skip this article entirely
             }
 
@@ -325,6 +385,7 @@ export class ArticleCrawler {
             // STEP 9: Save the high-quality article
             await Dataset.pushData(record);
             this.stats.saved++;
+            costMonitor.trackArticleProcessing(true); // Track successful processing
 
             log.info(`✅ SUCCESS: Saved high-quality article (${this.stats.saved}/${this.stats.processed})`);
             log.info(`   Title: ${record.title}`);
@@ -648,31 +709,49 @@ export class ArticleCrawler {
         const workingImages = [];
         const validationPromises = [];
 
-        // Process images in batches to avoid overwhelming the server
-        for (let i = 0; i < images.length; i += CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS) {
-            const batch = images.slice(i, i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS);
-
-            const batchPromises = batch.map(async (image) => {
-                // Handle both object format (new) and string format (legacy)
+        // COST OPTIMIZATION: Process images efficiently
+        if (CONFIG.IMAGE?.SKIP_VALIDATION) {
+            // Use pattern-based validation (no HTTP requests)
+            for (const image of images) {
                 const imageUrl = typeof image === 'string' ? image : image.url;
                 const imageObj = typeof image === 'string' ? { url: image, type: 'unknown', alt: '', caption: '' } : image;
 
-                if (!imageUrl) return;
+                if (!imageUrl) continue;
 
-                const isValid = await validateImageUrl(imageUrl, gotScraping);
+                const isValid = await validateImageUrl(imageUrl); // Uses pattern validation
+                costMonitor.trackImageValidation('pattern');
                 if (isValid) {
                     workingImages.push(imageObj);
                 }
-            });
+            }
+        } else {
+            // Original HTTP validation for non-optimized mode
+            for (let i = 0; i < images.length; i += CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS) {
+                const batch = images.slice(i, i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS);
 
-            validationPromises.push(...batchPromises);
+                const batchPromises = batch.map(async (image) => {
+                    // Handle both object format (new) and string format (legacy)
+                    const imageUrl = typeof image === 'string' ? image : image.url;
+                    const imageObj = typeof image === 'string' ? { url: image, type: 'unknown', alt: '', caption: '' } : image;
 
-            // Wait for batch to complete before processing next batch
-            await Promise.allSettled(batchPromises);
+                    if (!imageUrl) return;
 
-            // Small delay between batches
-            if (i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS < images.length) {
-                await sleep(100);
+                    const isValid = await validateImageUrl(imageUrl, gotScraping);
+                    costMonitor.trackImageValidation('http');
+                    if (isValid) {
+                        workingImages.push(imageObj);
+                    }
+                });
+
+                validationPromises.push(...batchPromises);
+
+                // Wait for batch to complete before processing next batch
+                await Promise.allSettled(batchPromises);
+
+                // Small delay between batches
+                if (i + CONFIG.IMAGE.MAX_CONCURRENT_VALIDATIONS < images.length) {
+                    await sleep(100);
+                }
             }
         }
 
