@@ -312,10 +312,10 @@ export class ArticleCrawler {
                 return; // Skip this article entirely
             }
 
-            // STEP 5.1: Apply "All or Nothing" validation - 300+ characters required (strict)
+            // STEP 5.1: Apply content length validation - 300+ characters required
             if (!extractedContent.text || extractedContent.text.length < 300) {
                 log.warning(`Article text too short: ${extractedContent.text ? extractedContent.text.length : 0} characters`);
-                log.info(`SKIPPING ARTICLE - Text content insufficient (minimum 300 characters required for "all or nothing" strategy)`);
+                log.info(`SKIPPING ARTICLE - Text content insufficient (minimum 300 characters required)`);
                 this.stats.skipped.textTooShort++;
                 return; // Skip this article entirely
             }
@@ -328,12 +328,11 @@ export class ArticleCrawler {
                 return; // Skip this article entirely
             }
 
-            // STEP 5.3: Images requirement - STRICT "all or nothing" strategy requires images
+            // STEP 5.3: Images requirement - BALANCED approach (prefer articles with images but don't require them)
             if (!extractedContent.images || extractedContent.images.length === 0) {
-                log.warning(`No images found for ${finalUrl}`);
-                log.info(`SKIPPING ARTICLE - No images found (required for "all or nothing" strategy)`);
-                this.stats.skipped.noImages++;
-                return; // Skip this article entirely
+                log.warning(`No images found for ${finalUrl} - proceeding without images`);
+                extractedContent.images = []; // Ensure it's an empty array
+                // Continue processing - don't skip the article
             }
 
             // STEP 6: Validate images (STRICT - images must pass validation for "all or nothing" strategy)
@@ -432,7 +431,19 @@ export class ArticleCrawler {
             log.info(`   Method: ${record.extractionMethod}`);
             log.info(`   Source: ${record.source}`);
 
+            // Check if we've reached the limit and should stop the crawler
+            if (this.currentMaxItemsLimit && this.stats.saved >= this.currentMaxItemsLimit) {
+                log.info(`🎯 TARGET REACHED: Saved ${this.stats.saved}/${this.currentMaxItemsLimit} articles - stopping crawler`);
+                // Signal the crawler to stop by throwing a special error
+                throw new Error('MAX_ITEMS_REACHED');
+            }
+
         } catch (error) {
+            // Handle the special MAX_ITEMS_REACHED signal
+            if (error.message === 'MAX_ITEMS_REACHED') {
+                throw error; // Re-throw to stop the crawler
+            }
+
             const errorMessage = error.message || String(error);
             log.error(`Error processing article ${request.url}:`, errorMessage);
             this.failedUrls.push({
@@ -973,7 +984,18 @@ export class ArticleCrawler {
 
         // Create and run main crawler
         const crawler = this.createCrawler();
-        await crawler.run(requests);
+        try {
+            await crawler.run(requests);
+        } catch (error) {
+            // Handle the special MAX_ITEMS_REACHED signal
+            if (error.message === 'MAX_ITEMS_REACHED') {
+                log.info('🎯 Crawler stopped: Maximum items limit reached');
+                // Continue with normal flow - don't treat this as an error
+            } else {
+                // Re-throw other errors
+                throw error;
+            }
+        }
 
         // Check if any URLs need browser mode fallback
         const browserFallbackRequests = this.failedUrls
