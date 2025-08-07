@@ -107,6 +107,12 @@ export class RssFetcher {
                 break;
             }
 
+            // Skip null, undefined, or non-object items
+            if (!item || typeof item !== 'object') {
+                log.warning('RSS item is null, undefined, or not an object, skipping');
+                continue;
+            }
+
             // Use guid or link as unique identifier
             const guid = item.guid || item.link;
             if (!guid) {

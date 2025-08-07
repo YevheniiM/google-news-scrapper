@@ -17,15 +17,14 @@ import { CONFIG } from './config.js';
 export function buildFeedUrl(query, language = CONFIG.RSS.DEFAULT_LANGUAGE, region = CONFIG.RSS.DEFAULT_REGION, dateFrom = null, dateTo = null) {
     let searchQuery = query;
 
-    // Temporarily disable date filters as Google News RSS doesn't support them
-    // TODO: Implement date filtering after RSS fetch by parsing article dates
-    // if (dateFrom && dateTo) {
-    //     searchQuery += ` after:${dateFrom} before:${dateTo}`;
-    // } else if (dateFrom) {
-    //     searchQuery += ` after:${dateFrom}`;
-    // } else if (dateTo) {
-    //     searchQuery += ` before:${dateTo}`;
-    // }
+    // Add date filters to the search query
+    if (dateFrom && dateTo) {
+        searchQuery += ` after:${dateFrom} before:${dateTo}`;
+    } else if (dateFrom) {
+        searchQuery += ` after:${dateFrom}`;
+    } else if (dateTo) {
+        searchQuery += ` before:${dateTo}`;
+    }
 
     const params = new URLSearchParams({
         q: searchQuery,
@@ -331,11 +330,19 @@ export function sleep(ms) {
 
 /**
  * Format date to YYYY-MM-DD format
- * @param {Date} date - Date to format
+ * @param {Date|string} date - Date to format
  * @returns {string} Formatted date string
  */
 export function formatDate(date) {
-    return date.toISOString().split('T')[0];
+    // Handle string dates by converting to Date object
+    const dateObj = date instanceof Date ? date : new Date(date);
+
+    // Check if date is valid
+    if (isNaN(dateObj.getTime())) {
+        throw new Error('Invalid date');
+    }
+
+    return dateObj.toISOString().split('T')[0];
 }
 
 /**
@@ -395,20 +402,26 @@ export function validateImageUrlByPattern(imageUrl) {
  */
 export function getDateRanges(dateFrom, dateTo, maxDays = CONFIG.DATE.MAX_DAYS_BACK) {
     const ranges = [];
-    // Temporary fix: use 2024 dates instead of system date (which is set to 2025)
-    const currentDate = new Date('2024-08-05');
+    // Use current date if no dateTo provided
+    const currentDate = new Date();
     const endDate = dateTo ? new Date(dateTo) : currentDate;
     const startDate = dateFrom ? new Date(dateFrom) : new Date(endDate.getTime() - (maxDays * 24 * 60 * 60 * 1000));
 
-    let iterDate = new Date(endDate);
+    // Calculate the number of days between start and end (inclusive)
+    const daysDiff = Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1;
 
-    while (iterDate >= startDate) {
-        const nextDate = new Date(iterDate.getTime() - (24 * 60 * 60 * 1000));
+    // Limit the number of ranges to maxDays
+    const actualDays = Math.min(daysDiff, maxDays);
+
+    // Generate ranges for each day
+    for (let i = 0; i < actualDays; i++) {
+        const rangeEnd = new Date(endDate.getTime() - (i * 24 * 60 * 60 * 1000));
+        const rangeStart = new Date(rangeEnd.getTime() - (24 * 60 * 60 * 1000));
+
         ranges.push({
-            from: formatDate(nextDate),
-            to: formatDate(iterDate),
+            from: formatDate(rangeStart),
+            to: formatDate(rangeEnd),
         });
-        iterDate = nextDate;
     }
 
     return ranges;
@@ -426,7 +439,7 @@ export function cleanText(text) {
     const textStr = typeof text === 'string' ? text : String(text);
 
     return textStr
-        .replace(/\s+/g, ' ') // Replace multiple whitespace with single space
+        .replace(/[ \t]+/g, ' ') // Replace multiple spaces/tabs with single space
         .replace(/\n+/g, '\n') // Replace multiple newlines with single newline
         .trim();
 }

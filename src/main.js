@@ -89,7 +89,7 @@ async function main() {
     const articleCrawler = new ArticleCrawler(articleProxy, useBrowser);
 
     // Implement smart maxItems handling - continue until we get enough quality articles
-    await articleCrawler.crawlWithQualityTarget({
+    const crawlResults = await articleCrawler.crawlWithQualityTarget({
         rssFetcher,
         query,
         region,
@@ -101,10 +101,13 @@ async function main() {
 
     // Final statistics
     const failedUrls = articleCrawler.getFailedUrls();
-    const successRate = (((articles.size - failedUrls.length) / articles.size) * 100).toFixed(1);
+    const totalProcessed = crawlResults?.totalProcessed || 0;
+    const articlesSaved = crawlResults?.saved || 0;
+    const successRate = totalProcessed > 0 ? (((totalProcessed - failedUrls.length) / totalProcessed) * 100).toFixed(1) : '0.0';
 
     log.info('Scraping completed', {
-        totalArticlesFound: articles.size,
+        totalArticlesProcessed: totalProcessed,
+        articlesSaved: articlesSaved,
         failedArticles: failedUrls.length,
         successRate: `${successRate}%`,
     });

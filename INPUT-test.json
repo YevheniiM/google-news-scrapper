@@ -2,6 +2,6 @@
   "query": "artificial intelligence",
   "region": "US",
   "language": "en-US",
-  "maxItems": 5,
+  "maxItems": 3,
   "useBrowser": false
 }

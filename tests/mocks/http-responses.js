@@ -180,25 +180,41 @@ export const mockResponses = {
 export function createMockGotScraping(responseMap = {}) {
   return async (options) => {
     const url = typeof options === 'string' ? options : options.url;
-    
+
     // Check if we have a specific mock for this URL
     if (responseMap[url]) {
       return responseMap[url];
     }
-    
-    // Default responses based on URL patterns
+
+    // Special handling for RSS feeds based on query parameters
     if (url.includes('news.google.com/rss')) {
+      if (url.includes('q=empty')) {
+        return mockResponses.emptyRss;
+      }
+      if (url.includes('q=malformed')) {
+        return mockResponses.malformedRss;
+      }
+      if (url.includes('q=error')) {
+        throw new Error('Network error');
+      }
+      if (url.includes('q=invalid')) {
+        return mockResponses.emptyRss;
+      }
+      if (url.includes('q=timeout')) {
+        throw new Error('Timeout error');
+      }
+      // Default RSS response
       return mockResponses.rssSuccess;
     }
-    
+
     if (url.includes('consent') || url.includes('before-you-continue')) {
       return mockResponses.consentPage;
     }
-    
+
     if (url.includes('image') || url.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
       return mockResponses.imageSuccess;
     }
-    
+
     // Default to article success
     return mockResponses.articleSuccess;
   };

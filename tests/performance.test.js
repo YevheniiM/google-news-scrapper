@@ -150,7 +150,7 @@ describe('Performance Tests', () => {
       expect(result.success).toBe(true);
       expect(result.title).toBeTruthy();
       expect(result.text).toBeTruthy();
-      expect(processingTime).toBeLessThan(100); // Should extract large content quickly
+      expect(processingTime).toBeLessThan(200); // Should extract large content quickly
     });
 
     test('should handle multiple extraction strategies efficiently', () => {

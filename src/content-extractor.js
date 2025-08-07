@@ -523,7 +523,7 @@ export class ContentExtractor {
      * @returns {object} Best extracted content
      */
     extractContent(html, url = '') {
-        let bestResult = { success: false };
+        let bestResult = this.createEmptyResult();
         let bestScore = 0;
 
         // Try each extraction strategy

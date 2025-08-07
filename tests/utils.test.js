@@ -123,14 +123,19 @@ describe('Utils', () => {
     test('should extract images from unfluff data', () => {
       const unfluffData = { image: 'https://example.com/unfluff-image.jpg' };
       const images = extractImages(unfluffData, mockCheerio);
-      expect(images).toContain('https://example.com/unfluff-image.jpg');
+      expect(Array.isArray(images)).toBe(true);
+      expect(images.length).toBeGreaterThan(0);
+      expect(images[0]).toHaveProperty('url', 'https://example.com/unfluff-image.jpg');
+      expect(images[0]).toHaveProperty('type', 'featured');
     });
 
     test('should deduplicate images', () => {
       const unfluffData = { image: 'https://example.com/same-image.jpg' };
       const images = extractImages(unfluffData, mockCheerio);
-      const uniqueImages = [...new Set(images)];
-      expect(images.length).toBe(uniqueImages.length);
+      // Extract URLs for deduplication check
+      const imageUrls = images.map(img => img.url);
+      const uniqueUrls = [...new Set(imageUrls)];
+      expect(imageUrls.length).toBe(uniqueUrls.length);
     });
 
     test('should handle missing unfluff image', () => {
@@ -184,7 +189,8 @@ describe('Utils', () => {
     });
 
     test('should handle different date formats', () => {
-      const date = new Date('August 4, 2024');
+      // Use ISO string to avoid timezone issues
+      const date = new Date('2024-08-04T12:00:00Z');
       expect(formatDate(date)).toBe('2024-08-04');
     });
   });

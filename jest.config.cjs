@@ -2,9 +2,6 @@ module.exports = {
   // Test environment
   testEnvironment: 'node',
 
-  // Enable ES modules support
-  extensionsToTreatAsEsm: ['.js'],
-
   // Test file patterns
   testMatch: [
     '**/tests/**/*.test.js',

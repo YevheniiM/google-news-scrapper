@@ -2,7 +2,7 @@
   "query": "artificial intelligence",
   "region": "US",
   "language": "en-US",
-  "maxItems": 15,
+  "maxItems": 3,
   "useBrowser": false,
   "lightweightMode": true,
   "costOptimized": true

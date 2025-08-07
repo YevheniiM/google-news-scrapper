@@ -39,6 +39,7 @@ export class ArticleCrawler {
             minRequestInterval: 500 // 0.5 seconds between requests
         });
         this.browserFallbackDomains = new Set(); // Domains that require browser mode
+
         this.browserFallbackIndicators = [
             'javascript is required',
             'enable javascript',
@@ -84,6 +85,9 @@ export class ArticleCrawler {
                 qualityTooLow: 0
             }
         };
+
+        // Current maxItems limit for the crawling session
+        this.currentMaxItemsLimit = null;
     }
 
     /**
@@ -152,36 +156,48 @@ export class ArticleCrawler {
      * @returns {CheerioCrawler|PlaywrightCrawler} Configured crawler
      */
     createCrawler() {
-        const crawlerOptions = {
-            maxConcurrency: CONFIG.CRAWLER.MAX_CONCURRENCY,
-            maxRequestRetries: CONFIG.CRAWLER.MAX_RETRIES,
-            requestHandlerTimeoutSecs: CONFIG.CRAWLER.REQUEST_TIMEOUT / 1000,
-            requestHandler: this.handleRequest.bind(this),
-            failedRequestHandler: this.handleFailedRequest.bind(this),
-            // Session management
-            useSessionPool: true,
-            persistCookiesPerSession: true,
-            sessionPoolOptions: this.sessionManager.getSessionPoolOptions(),
-        };
+        try {
+            const crawlerOptions = {
+                maxConcurrency: CONFIG.CRAWLER.MAX_CONCURRENCY,
+                maxRequestRetries: CONFIG.CRAWLER.MAX_RETRIES,
+                requestHandlerTimeoutSecs: CONFIG.CRAWLER.REQUEST_TIMEOUT / 1000,
+                requestHandler: this.handleRequest.bind(this),
+                failedRequestHandler: this.handleFailedRequest.bind(this),
+                // Session management
+                useSessionPool: true,
+                persistCookiesPerSession: true,
+                sessionPoolOptions: this.sessionManager.getSessionPoolOptions(),
+            };
 
-        // Only add proxy configuration if it exists
-        if (this.proxyConfiguration) {
-            crawlerOptions.proxyConfiguration = this.proxyConfiguration;
-        }
+            // Only add proxy configuration if it exists and is valid
+            if (this.proxyConfiguration && typeof this.proxyConfiguration === 'object') {
+                crawlerOptions.proxyConfiguration = this.proxyConfiguration;
+            } else if (this.proxyConfiguration) {
+                log.warning('Invalid proxy configuration provided, skipping proxy setup');
+            }
 
-        if (this.useBrowser) {
-            log.info('Using PlaywrightCrawler for JavaScript-rendered pages');
-            return new PlaywrightCrawler({
-                ...crawlerOptions,
-                launchContext: {
-                    launchOptions: {
-                        headless: true,
+            if (this.useBrowser) {
+                log.info('Using PlaywrightCrawler for JavaScript-rendered pages');
+                return new PlaywrightCrawler({
+                    ...crawlerOptions,
+                    launchContext: {
+                        launchOptions: {
+                            headless: true,
+                        },
                     },
-                },
+                });
+            } else {
+                log.info('Using CheerioCrawler for HTML parsing');
+                return new CheerioCrawler(crawlerOptions);
+            }
+        } catch (error) {
+            log.error('Failed to create crawler:', error.message);
+            // Return a basic CheerioCrawler as fallback
+            return new CheerioCrawler({
+                maxConcurrency: 1,
+                requestHandler: this.handleRequest.bind(this),
+                failedRequestHandler: this.handleFailedRequest.bind(this),
             });
-        } else {
-            log.info('Using CheerioCrawler for HTML parsing');
-            return new CheerioCrawler(crawlerOptions);
         }
     }
 
@@ -296,10 +312,10 @@ export class ArticleCrawler {
                 return; // Skip this article entirely
             }
 
-            // STEP 5.1: Apply STRICT "All or Nothing" validation - 250+ characters required
-            if (!extractedContent.text || extractedContent.text.length < 250) {
+            // STEP 5.1: Apply "All or Nothing" validation - 300+ characters required (strict)
+            if (!extractedContent.text || extractedContent.text.length < 300) {
                 log.warning(`Article text too short: ${extractedContent.text ? extractedContent.text.length : 0} characters`);
-                log.info(`SKIPPING ARTICLE - Text content insufficient (minimum 250 characters required for "all or nothing" strategy)`);
+                log.info(`SKIPPING ARTICLE - Text content insufficient (minimum 300 characters required for "all or nothing" strategy)`);
                 this.stats.skipped.textTooShort++;
                 return; // Skip this article entirely
             }
@@ -312,7 +328,7 @@ export class ArticleCrawler {
                 return; // Skip this article entirely
             }
 
-            // STEP 5.3: STRICT images requirement - must have at least one image for "all or nothing"
+            // STEP 5.3: Images requirement - STRICT "all or nothing" strategy requires images
             if (!extractedContent.images || extractedContent.images.length === 0) {
                 log.warning(`No images found for ${finalUrl}`);
                 log.info(`SKIPPING ARTICLE - No images found (required for "all or nothing" strategy)`);
@@ -320,31 +336,34 @@ export class ArticleCrawler {
                 return; // Skip this article entirely
             }
 
-            // STEP 6: Validate images (RELAXED - accept images even if some fail validation)
-            let workingImages = await this.validateImages(extractedContent.images);
+            // STEP 6: Validate images (STRICT - images must pass validation for "all or nothing" strategy)
+            let workingImages = [];
+            if (extractedContent.images && extractedContent.images.length > 0) {
+                workingImages = await this.validateImages(extractedContent.images);
 
-            if (workingImages.length === 0) {
-                // If no images pass validation, still proceed if we have any images at all
-                // This handles cases where image validation is too strict (CORS, etc.)
-                log.warning(`No images passed validation for ${finalUrl}, but proceeding with original images`);
-                // Use original images even if they didn't pass validation
-                workingImages = extractedContent.images.slice(0, 3); // Take first 3 images
+                if (workingImages.length === 0) {
+                    // STRICT: If no images pass validation, skip the article
+                    log.warning(`No images passed validation for ${finalUrl}`);
+                    log.info(`SKIPPING ARTICLE - No valid images found (required for "all or nothing" strategy)`);
+                    this.stats.skipped.imageValidationFailed++;
+                    return; // Skip this article entirely
+                }
             }
 
-            log.info(`✅ Article passed STRICT quality checks: ${extractedContent.text.length} chars, ${workingImages.length} working images`);
+            log.info(`✅ Article passed quality checks: ${extractedContent.text.length} chars, ${workingImages.length} images`);
 
-            // STEP 7: Final STRICT quality validation for "all or nothing"
+            // STEP 7: Final quality validation (RELAXED - lower threshold)
             const contentValidation = validateContentQuality(extractedContent, userData, workingImages);
 
             log.info(`Content quality: ${contentValidation.qualityLevel} (score: ${contentValidation.qualityScore})`);
 
-            // STRICT quality check - require good quality for "all or nothing" strategy
-            if (!contentValidation.isValid || contentValidation.qualityScore < 40) {
-                log.warning(`Article quality too low for "all or nothing": ${contentValidation.qualityScore}`);
+            // RELAXED quality check - lower threshold for better success rate
+            if (!contentValidation.isValid || contentValidation.qualityScore < 25) {
+                log.warning(`Article quality too low: ${contentValidation.qualityScore}`);
                 if (contentValidation.issues.length > 0) {
                     log.warning(`Quality issues: ${contentValidation.issues.join(', ')}`);
                 }
-                log.info(`SKIPPING ARTICLE - Quality score too low (minimum 40 required for "all or nothing" strategy)`);
+                log.info(`SKIPPING ARTICLE - Quality score too low (minimum 25 required)`);
                 this.stats.skipped.qualityTooLow++;
                 return; // Skip this article entirely
             }
@@ -375,9 +394,33 @@ export class ArticleCrawler {
                 }
             };
 
-            // STEP 9: Save the high-quality article
+            // STEP 9: Check maxItems limit before saving (atomic check and increment)
+            if (this.currentMaxItemsLimit && this.stats.saved >= this.currentMaxItemsLimit) {
+                log.info(`✋ LIMIT REACHED: Already saved ${this.stats.saved} articles (limit: ${this.currentMaxItemsLimit})`);
+                log.info(`   Skipping article: ${record.title}`);
+                this.stats.skipped.maxItemsReached = (this.stats.skipped.maxItemsReached || 0) + 1;
+                return;
+            }
+
+            // Increment saved counter immediately to prevent race conditions
+            if (this.currentMaxItemsLimit) {
+                this.stats.saved++;
+                // Double-check after incrementing to handle race conditions
+                if (this.stats.saved > this.currentMaxItemsLimit) {
+                    log.info(`✋ LIMIT EXCEEDED: Saved ${this.stats.saved} articles (limit: ${this.currentMaxItemsLimit})`);
+                    log.info(`   Reverting and skipping article: ${record.title}`);
+                    this.stats.saved--; // Revert the increment
+                    this.stats.skipped.maxItemsReached = (this.stats.skipped.maxItemsReached || 0) + 1;
+                    return;
+                }
+            }
+
+            // STEP 10: Save the high-quality article
             await Dataset.pushData(record);
-            this.stats.saved++;
+            // Note: stats.saved is already incremented in the limit check above for maxItems scenarios
+            if (!this.currentMaxItemsLimit) {
+                this.stats.saved++;
+            }
             costMonitor.trackArticleProcessing(true); // Track successful processing
 
             log.info(`✅ SUCCESS: Saved high-quality article (${this.stats.saved}/${this.stats.processed})`);
@@ -471,10 +514,10 @@ export class ArticleCrawler {
             return true; // Too few sentences
         }
 
-        // Check for very short sentences (likely navigation or error text)
+        // Check for very short sentences (likely navigation or error text) - RELAXED
         const avgSentenceLength = text.length / sentences.length;
-        if (avgSentenceLength < 20) {
-            return true; // Sentences too short
+        if (avgSentenceLength < 15) {
+            return true; // Sentences too short (relaxed from 20 to 15)
         }
 
         return false;
@@ -673,8 +716,8 @@ export class ArticleCrawler {
     async handleFailedRequest(context) {
         const { request, error } = context;
 
-        const errorMessage = error.message || String(error);
-        log.error(`Article crawling failed for ${request.url}:`, errorMessage);
+        const errorMessage = error.message || error.toString() || 'Unknown error';
+        log.error(`Article crawling failed for ${request.url}: ${errorMessage}`);
 
         this.failedUrls.push({
             url: request.url,
@@ -778,7 +821,7 @@ export class ArticleCrawler {
     /**
      * Crawl articles with quality-based target - continue until we get enough complete articles
      * @param {object} params - Parameters including rssFetcher, query, maxItems, etc.
-     * @returns {Promise<void>}
+     * @returns {Promise<object>} Statistics object with saved, totalProcessed, target, and success
      */
     async crawlWithQualityTarget(params) {
         const { rssFetcher, query, region, language, maxItems, dateFrom, dateTo } = params;
@@ -792,11 +835,24 @@ export class ArticleCrawler {
 
             if (articles.size === 0) {
                 log.warning('No articles found in RSS feeds');
-                return;
+                return {
+                    saved: 0,
+                    totalProcessed: 0,
+                    target: 0,
+                    success: true
+                };
             }
 
+            const statsBefore = { ...this.stats };
             await this.crawlArticles(Array.from(articles.values()), query);
-            return;
+            const saved = this.stats.saved - statsBefore.saved;
+
+            return {
+                saved: saved,
+                totalProcessed: articles.size,
+                target: 0,
+                success: true
+            };
         }
 
         log.info(`Starting quality-targeted crawling for ${maxItems} complete articles`);
@@ -829,8 +885,11 @@ export class ArticleCrawler {
             // Track stats before processing this batch
             const statsBefore = { ...this.stats };
 
-            // Process this batch
-            await this.crawlArticles(articlesArray, query);
+            // Calculate how many more articles we need
+            const articlesNeeded = maxItems - qualityArticlesSaved;
+
+            // Process this batch with maxItems limit
+            await this.crawlArticles(articlesArray, query, articlesNeeded);
 
             // Calculate how many quality articles we got from this batch
             const qualityArticlesFromBatch = this.stats.saved - statsBefore.saved;
@@ -864,21 +923,32 @@ export class ArticleCrawler {
         }
 
         log.info(`Quality-targeted crawling completed: ${qualityArticlesSaved}/${maxItems} target articles saved`);
+
+        return {
+            saved: qualityArticlesSaved,
+            totalProcessed: totalArticlesProcessed,
+            target: maxItems,
+            success: qualityArticlesSaved >= maxItems
+        };
     }
 
     /**
      * Crawl articles from RSS items
      * @param {Array} rssItems - Array of RSS items
      * @param {string} query - Original search query
+     * @param {number} maxItemsLimit - Maximum number of articles to save (optional)
      * @returns {Promise<void>}
      */
-    async crawlArticles(rssItems, query) {
+    async crawlArticles(rssItems, query, maxItemsLimit = null) {
         if (!rssItems || rssItems.length === 0) {
             log.warning('No RSS items to crawl');
             return;
         }
 
-        log.info(`Starting article crawling for ${rssItems.length} articles`);
+        log.info(`Starting article crawling for ${rssItems.length} articles${maxItemsLimit ? ` (limit: ${maxItemsLimit})` : ''}`);
+
+        // Store the maxItemsLimit in the instance for use in handleRequest
+        this.currentMaxItemsLimit = maxItemsLimit;
 
         // Prepare requests
         const requests = rssItems.map((item) => {
@@ -962,6 +1032,7 @@ export class ArticleCrawler {
         log.info(`  • No images found: ${this.stats.skipped.noImages}`);
         log.info(`  • Image validation failed: ${this.stats.skipped.imageValidationFailed}`);
         log.info(`  • Quality score too low: ${this.stats.skipped.qualityTooLow}`);
+        log.info(`  • Max items limit reached: ${this.stats.skipped.maxItemsReached || 0}`);
         log.info('='.repeat(60));
 
         if (this.stats.saved === 0) {
@@ -993,6 +1064,8 @@ export class ArticleCrawler {
             log.error('Error during cleanup:', error.message);
         }
     }
+
+
 
     /**
      * Get failed URLs

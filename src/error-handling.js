@@ -633,6 +633,36 @@ export class ErrorHandler {
     }
 
     /**
+     * Generate comprehensive error report
+     * @returns {object} Error report
+     */
+    async generateErrorReport() {
+        const stats = this.getStats();
+        const healthStatus = this.getHealthStatus();
+
+        return {
+            timestamp: new Date().toISOString(),
+            runtime: Date.now() - stats.startTime,
+            errorStats: {
+                total: stats.total,
+                consecutive: stats.consecutive,
+                byType: Object.fromEntries(stats.byType),
+                byStatusCode: Object.fromEntries(stats.byStatusCode),
+            },
+            healthStatus,
+            lastError: stats.lastError ? {
+                type: stats.lastError.type,
+                message: stats.lastError.message,
+                timestamp: stats.lastError.timestamp,
+                context: stats.lastError.context,
+            } : null,
+            failedRequestsCount: stats.failedRequestsCount,
+            recoveryAttempts: stats.recoveryAttempts,
+            recoveryInProgress: stats.recoveryInProgress,
+        };
+    }
+
+    /**
      * Cleanup resources
      */
     cleanup() {

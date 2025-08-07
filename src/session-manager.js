@@ -62,17 +62,21 @@ export class SessionManager {
      * @param {object} session - Crawlee session object
      */
     async addConsentCookies(session) {
-        const consentCookies = [
-            { name: 'CONSENT', value: 'YES+cb.20210720-07-p0.en+FX+410', domain: '.google.com' },
-            { name: 'SOCS', value: 'CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg', domain: '.google.com' },
-            { name: 'NID', value: '511=consent_accepted', domain: '.google.com' },
-        ];
+        try {
+            const consentCookies = [
+                { name: 'CONSENT', value: 'YES+cb.20210720-07-p0.en+FX+410', domain: '.google.com' },
+                { name: 'SOCS', value: 'CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg', domain: '.google.com' },
+                { name: 'NID', value: '511=consent_accepted', domain: '.google.com' },
+            ];
 
-        for (const cookie of consentCookies) {
-            await session.setCookies([cookie], 'https://google.com');
+            for (const cookie of consentCookies) {
+                await session.setCookies([cookie], 'https://google.com');
+            }
+
+            log.debug('Added consent bypass cookies to session');
+        } catch (error) {
+            log.warning('Failed to add consent cookies:', error.message);
         }
-
-        log.debug('Added consent bypass cookies to session');
     }
 
     /**
@@ -80,16 +84,20 @@ export class SessionManager {
      * @param {object} session - Crawlee session object
      */
     async addGooglePreferences(session) {
-        const prefCookies = [
-            { name: 'PREF', value: 'f1=50000000&f6=8&hl=en-US&gl=US', domain: '.google.com' },
-            { name: '1P_JAR', value: new Date().toISOString().slice(0, 10), domain: '.google.com' },
-        ];
+        try {
+            const prefCookies = [
+                { name: 'PREF', value: 'f1=50000000&f6=8&hl=en-US&gl=US', domain: '.google.com' },
+                { name: '1P_JAR', value: new Date().toISOString().slice(0, 10), domain: '.google.com' },
+            ];
 
-        for (const cookie of prefCookies) {
-            await session.setCookies([cookie], 'https://google.com');
+            for (const cookie of prefCookies) {
+                await session.setCookies([cookie], 'https://google.com');
+            }
+
+            log.debug('Added Google preference cookies to session');
+        } catch (error) {
+            log.warning('Failed to add Google preference cookies:', error.message);
         }
-
-        log.debug('Added Google preference cookies to session');
     }
 
     /**
@@ -97,16 +105,20 @@ export class SessionManager {
      * @param {object} session - Crawlee session object
      */
     async addEuropeanBypass(session) {
-        const euCookies = [
-            { name: 'CONSENT', value: 'PENDING+999', domain: '.google.com' },
-            { name: 'ANID', value: 'consent_state_service_pending', domain: '.google.com' },
-        ];
+        try {
+            const euCookies = [
+                { name: 'CONSENT', value: 'PENDING+999', domain: '.google.com' },
+                { name: 'ANID', value: 'consent_state_service_pending', domain: '.google.com' },
+            ];
 
-        for (const cookie of euCookies) {
-            await session.setCookies([cookie], 'https://google.com');
+            for (const cookie of euCookies) {
+                await session.setCookies([cookie], 'https://google.com');
+            }
+
+            log.debug('Added European consent bypass cookies to session');
+        } catch (error) {
+            log.warning('Failed to add European consent bypass cookies:', error.message);
         }
-
-        log.debug('Added European consent bypass cookies to session');
     }
 
     /**
@@ -115,10 +127,20 @@ export class SessionManager {
      * @param {number} strategyIndex - Strategy index to use
      */
     async applyConsentBypass(session, strategyIndex = 0) {
-        if (strategyIndex < this.consentBypassStrategies.length) {
-            const strategy = this.consentBypassStrategies[strategyIndex];
-            await strategy(session);
-            log.debug(`Applied consent bypass strategy ${strategyIndex}`);
+        try {
+            if (strategyIndex >= 0 && strategyIndex < this.consentBypassStrategies.length) {
+                const strategy = this.consentBypassStrategies[strategyIndex];
+                if (typeof strategy === 'function') {
+                    await strategy(session);
+                    log.debug(`Applied consent bypass strategy ${strategyIndex}`);
+                } else {
+                    log.warning(`Invalid strategy at index ${strategyIndex}`);
+                }
+            } else {
+                log.warning(`Strategy index ${strategyIndex} is out of bounds`);
+            }
+        } catch (error) {
+            log.warning(`Failed to apply consent bypass strategy ${strategyIndex}:`, error.message);
         }
     }
 
@@ -137,6 +159,7 @@ export class SessionManager {
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
             'Cache-Control': 'no-cache',
+            'DNT': '1',
         };
     }
 
