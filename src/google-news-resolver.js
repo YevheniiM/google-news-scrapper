@@ -308,7 +308,7 @@ export class GoogleNewsResolver {
             // Report proxy error and rotate if applicable
             if (this.proxyManager && (error.response?.statusCode === 429 || error.response?.statusCode === 403 || error.response?.statusCode === 502 || error.response?.statusCode === 503)) {
                 log.warning(`Proxy error ${error.response.statusCode} - rotating proxy`);
-                this.proxyManager.reportProxyError(error, error.response.statusCode);
+                this.proxyManager.reportProxyError(articleUrl, error, error.response.statusCode);
                 // Force proxy rotation for next request
                 await this.proxyManager.rotateProxy();
             }
@@ -356,7 +356,7 @@ export class GoogleNewsResolver {
                 // Report proxy error and rotate if applicable
                 if (this.proxyManager && (error.response?.statusCode === 429 || error.response?.statusCode === 403 || error.response?.statusCode === 502 || error.response?.statusCode === 503)) {
                     log.warning(`Proxy error ${error.response.statusCode} in batchexecute - rotating proxy`);
-                    this.proxyManager.reportProxyError(error, error.response.statusCode);
+                    this.proxyManager.reportProxyError('https://news.google.com/_/DotsSplashUi/data/batchexecute', error, error.response.statusCode);
                     // Force proxy rotation for next request
                     await this.proxyManager.rotateProxy();
                 }

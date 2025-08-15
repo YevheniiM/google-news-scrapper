@@ -24,6 +24,7 @@ export class RssFetcher {
     constructor(proxyConfiguration = null) {
         this.proxyConfiguration = proxyConfiguration;
         this.articles = new Map(); // guid -> rssItem for deduplication
+        this.returnedArticles = new Set(); // Track which articles have been returned before
         this.sessionManager = new SessionManager();
 
         // Error handling components
@@ -44,6 +45,7 @@ export class RssFetcher {
      */
     resetArticles() {
         this.articles.clear();
+        this.returnedArticles.clear();
         log.info('RSS articles collection reset for new session');
     }
 
@@ -102,8 +104,8 @@ export class RssFetcher {
         let newItemsCount = 0;
 
         for (const item of items) {
-            // Stop if we've reached the maximum items
-            if (maxItems > 0 && this.articles.size >= maxItems) {
+            // Stop if we've reached the maximum items for this call
+            if (maxItems > 0 && newItemsCount >= maxItems) {
                 break;
             }
 
@@ -151,8 +153,8 @@ export class RssFetcher {
 
         log.info(`Starting RSS collection for query: "${query}" (target: ${maxItems || 'unlimited'})`);
 
-        // Note: Don't clear articles here as we might be called multiple times
-        // for the same crawling session to build up more articles
+        // Track the size before this call to know how many new articles we get
+        const initialSize = this.articles.size;
 
         // Initial fetch without date slicing
         const initialFeedUrl = buildFeedUrl(query, language, region);
@@ -163,29 +165,44 @@ export class RssFetcher {
 
         // If we need more articles and haven't reached the limit, try alternative strategies
         if (maxItems > 0 && this.articles.size < maxItems) {
-            log.info(`Need more articles (${this.articles.size}/${maxItems}), trying alternative strategies...`);
+            const articlesNeeded = maxItems - this.articles.size;
+            log.info(`Need ${articlesNeeded} more articles (${this.articles.size}/${maxItems}), trying alternative strategies...`);
 
-            // Strategy 1: Try multiple RSS endpoints and variations
-            await this.fetchWithMultipleEndpoints(query, language, region, maxItems);
+            // For small targets, be more conservative with alternative strategies
+            const shouldTryAlternatives = maxItems > 5 || this.articles.size === 0;
 
-            // Strategy 2: Try different regional variations of the same query
-            if (this.articles.size < maxItems) {
-                await this.fetchWithRegionalVariations(query, language, region, maxItems);
-            }
+            if (shouldTryAlternatives) {
+                // Strategy 1: Try multiple RSS endpoints and variations
+                await this.fetchWithMultipleEndpoints(query, language, region, maxItems);
 
-            // Strategy 3: Skip related queries - user wants exact query only
+                // Strategy 2: Try different regional variations of the same query
+                if (this.articles.size < maxItems) {
+                    await this.fetchWithRegionalVariations(query, language, region, maxItems);
+                }
 
-            // Strategy 3: Try broader time ranges if still not enough
-            if (this.articles.size < maxItems) {
-                await this.fetchWithTimeVariations(query, language, region, maxItems);
+                // Strategy 3: Try broader time ranges if still not enough
+                if (this.articles.size < maxItems) {
+                    await this.fetchWithTimeVariations(query, language, region, maxItems);
+                }
+            } else {
+                log.info(`Small target (${maxItems}), skipping alternative strategies to avoid over-fetching`);
             }
         }
 
         // Store progress
         await Actor.setValue(CONFIG.STORAGE.RSS_ITEMS_KEY, Array.from(this.articles.values()));
 
-        log.info(`RSS collection completed. Total items: ${this.articles.size}`);
-        return this.articles;
+        // Return only articles that haven't been returned before
+        const newArticlesMap = new Map();
+        for (const [guid, article] of this.articles) {
+            if (!this.returnedArticles.has(guid)) {
+                newArticlesMap.set(guid, article);
+                this.returnedArticles.add(guid);
+            }
+        }
+
+        log.info(`RSS collection completed. New articles: ${newArticlesMap.size}, Total items: ${this.articles.size}`);
+        return newArticlesMap;
     }
 
     /**
@@ -211,6 +228,12 @@ export class RssFetcher {
                 const items = await this.fetchFeed(feedUrl);
                 const newItemsCount = this.processRssItems(items, maxItems);
                 log.info(`Region ${altRegion}: ${newItemsCount} new items, total: ${this.articles.size}`);
+
+                // Early termination for small targets if we have enough
+                if (maxItems <= 10 && this.articles.size >= maxItems) {
+                    log.info(`Small target reached (${this.articles.size}/${maxItems}), stopping regional variations`);
+                    break;
+                }
 
                 // Rate limiting between regional requests
                 await sleep(CONFIG.RSS.RATE_LIMIT_DELAY);
@@ -252,6 +275,12 @@ export class RssFetcher {
                 const items = await this.fetchFeed(feedUrl);
                 const newItemsCount = this.processRssItems(items, maxItems);
                 log.info(`Time variation ${timeParam}: ${newItemsCount} new items, total: ${this.articles.size}`);
+
+                // Early termination for small targets if we have enough
+                if (maxItems <= 10 && this.articles.size >= maxItems) {
+                    log.info(`Small target reached (${this.articles.size}/${maxItems}), stopping time variations`);
+                    break;
+                }
 
                 // Rate limiting between time variation requests
                 await sleep(CONFIG.RSS.RATE_LIMIT_DELAY);
@@ -333,6 +362,12 @@ export class RssFetcher {
                 const items = await this.fetchFeed(feedUrl);
                 const newItemsCount = this.processRssItems(items, maxItems);
                 log.info(`Endpoint variation: ${newItemsCount} new items, total: ${this.articles.size}`);
+
+                // Early termination for small targets if we have enough
+                if (maxItems <= 10 && this.articles.size >= maxItems) {
+                    log.info(`Small target reached (${this.articles.size}/${maxItems}), stopping endpoint variations`);
+                    break;
+                }
 
                 // Rate limiting between endpoint requests
                 await sleep(CONFIG.RSS.RATE_LIMIT_DELAY);

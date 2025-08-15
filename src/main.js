@@ -59,6 +59,7 @@ async function main() {
         useBrowser = CONFIG.COST_OPTIMIZATION?.USE_BROWSER_BY_DEFAULT ?? false,
         lightweightMode = false,
         costOptimized = false,
+        disableProxies = false,
     } = input;
 
     // Apply cost optimization settings
@@ -71,14 +72,20 @@ async function main() {
         }
     }
 
+    // Optional: disable proxies entirely for local testing
+    if (disableProxies) {
+        log.warning('🧪 Local testing: proxies are disabled');
+        CONFIG.PROXY.RESIDENTIAL_ENABLED = false;
+    }
+
     log.info('Google News Scraper starting', {
         query, region, language, maxItems, dateFrom, dateTo, useBrowser,
     });
 
-    // Configure proxies
-    const googleProxy = await createProxyConfiguration(['GOOGLE_SERP'], region);
+    // Configure proxies (skip if disabled)
+    const googleProxy = disableProxies ? null : await createProxyConfiguration(['GOOGLE_SERP'], region);
     const proxyGroups = CONFIG.PROXY.RESIDENTIAL_ENABLED ? ['RESIDENTIAL'] : ['DATACENTER'];
-    const articleProxy = await createProxyConfiguration(proxyGroups, region);
+    const articleProxy = disableProxies ? null : await createProxyConfiguration(proxyGroups, region);
 
     // Stage A: RSS Feed Processing with Smart Batching
     log.info('=== Stage A: RSS Feed Processing ===');

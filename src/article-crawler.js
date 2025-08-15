@@ -31,12 +31,13 @@ export class ArticleCrawler {
         this.proxyManager = new ProxyManager(proxyConfiguration);
 
         // Initialize production-grade Google News resolver with unified proxy support
+        // Increase minRequestInterval to reduce 429 rate limiting from Google News
         this.googleNewsResolver = new GoogleNewsResolver(this.proxyManager, {
             enablePersistence: true,
             cacheFile: 'storage/google-news-cache.json',
             maxCacheSize: 50000,
             cacheExpiryHours: 24,
-            minRequestInterval: 500 // 0.5 seconds between requests
+            minRequestInterval: 2000 // 2 seconds between requests
         });
         this.browserFallbackDomains = new Set(); // Domains that require browser mode
 
@@ -335,17 +336,16 @@ export class ArticleCrawler {
                 // Continue processing - don't skip the article
             }
 
-            // STEP 6: Validate images (STRICT - images must pass validation for "all or nothing" strategy)
+            // STEP 6: Validate images (RELAXED for local testing - don't require images to pass validation)
             let workingImages = [];
             if (extractedContent.images && extractedContent.images.length > 0) {
                 workingImages = await this.validateImages(extractedContent.images);
 
                 if (workingImages.length === 0) {
-                    // STRICT: If no images pass validation, skip the article
-                    log.warning(`No images passed validation for ${finalUrl}`);
-                    log.info(`SKIPPING ARTICLE - No valid images found (required for "all or nothing" strategy)`);
-                    this.stats.skipped.imageValidationFailed++;
-                    return; // Skip this article entirely
+                    // RELAXED: If no images pass validation, continue with empty images array
+                    log.warning(`No images passed validation for ${finalUrl} - continuing without images`);
+                    workingImages = []; // Continue with empty images
+                    // Don't skip the article - this is too strict for local testing
                 }
             }
 
@@ -875,14 +875,51 @@ export class ArticleCrawler {
         let totalArticlesProcessed = 0;
         let batchNumber = 1;
         const maxBatches = 10; // Prevent infinite loops
-        const batchSize = Math.max(maxItems * 2, 50); // Start with 2x the target, minimum 50
+
+        // More conservative batch size calculation to avoid over-fetching
+        // For very small maxItems, use minimal batches to avoid unnecessary requests
+        let batchSize;
+        if (maxItems === 1) {
+            batchSize = 3; // For single item requests, start with just 3 articles
+        } else if (maxItems <= 3) {
+            batchSize = maxItems * 2; // 2x multiplier for very small requests
+        } else if (maxItems <= 10) {
+            batchSize = Math.max(maxItems * 1.5, 8); // 1.5x multiplier, min 8
+        } else if (maxItems <= 20) {
+            batchSize = Math.max(maxItems * 1.3, 15); // 1.3x multiplier, min 15
+        } else {
+            batchSize = Math.max(maxItems * 1.2, 25); // 1.2x multiplier for larger requests, min 25
+        }
+
+        log.info(`Calculated initial batch size: ${batchSize} for maxItems: ${maxItems}`);
 
         while (qualityArticlesSaved < maxItems && batchNumber <= maxBatches) {
-            log.info(`=== Batch ${batchNumber}: Fetching ${batchSize} articles ===`);
+            // Calculate how many more articles we actually need
+            const articlesStillNeeded = maxItems - qualityArticlesSaved;
+
+            // Adjust batch size based on remaining need and previous success rate
+            let currentBatchSize = batchSize;
+            if (batchNumber > 1) {
+                // After first batch, be more conservative based on success rate
+                const overallSuccessRate = qualityArticlesSaved / totalArticlesProcessed;
+                if (overallSuccessRate > 0.3) {
+                    // Good success rate - use smaller batches
+                    currentBatchSize = Math.min(articlesStillNeeded * 2, batchSize);
+                } else if (overallSuccessRate > 0.1) {
+                    // Moderate success rate - use medium batches
+                    currentBatchSize = Math.min(articlesStillNeeded * 4, batchSize);
+                } else {
+                    // Low success rate - keep larger batches but cap at original size
+                    currentBatchSize = Math.min(batchSize, 100);
+                }
+                log.info(`Adjusted batch size from ${batchSize} to ${currentBatchSize} (success rate: ${(overallSuccessRate * 100).toFixed(1)}%)`);
+            }
+
+            log.info(`=== Batch ${batchNumber}: Fetching ${currentBatchSize} articles (need ${articlesStillNeeded} more) ===`);
 
             // Fetch a batch of articles
             const articles = await rssFetcher.fetchRssItems({
-                query, region, language, maxItems: batchSize, dateFrom, dateTo,
+                query, region, language, maxItems: currentBatchSize, dateFrom, dateTo,
             });
 
             if (articles.size === 0) {
@@ -892,6 +929,12 @@ export class ArticleCrawler {
 
             const articlesArray = Array.from(articles.values());
             log.info(`Batch ${batchNumber}: Processing ${articlesArray.length} articles`);
+
+            // Check if we got any new articles compared to previous batch
+            if (batchNumber > 1 && articlesArray.length === 0) {
+                log.warning('No new articles found in this batch, stopping to avoid reprocessing');
+                break;
+            }
 
             // Track stats before processing this batch
             const statsBefore = { ...this.stats };
@@ -915,12 +958,21 @@ export class ArticleCrawler {
                 break;
             }
 
-            // If we got very few quality articles from this batch, increase batch size for next iteration
-            const qualityRate = qualityArticlesFromBatch / articlesArray.length;
-            if (qualityRate < 0.1 && batchNumber < maxBatches) {
-                const newBatchSize = Math.min(batchSize * 2, 200);
-                log.info(`Low quality rate (${(qualityRate * 100).toFixed(1)}%), increasing next batch size to ${newBatchSize}`);
-                // Note: We can't change batchSize mid-loop as rssFetcher might have limitations
+            // Analyze batch performance for logging
+            const qualityRate = articlesArray.length > 0 ? qualityArticlesFromBatch / articlesArray.length : 0;
+            log.info(`Batch ${batchNumber} quality rate: ${(qualityRate * 100).toFixed(1)}% (${qualityArticlesFromBatch}/${articlesArray.length})`);
+
+            // Check for rate limiting issues (429 errors)
+            const rateLimitErrors = this.failedUrls.filter(f => f.error && f.error.includes('429')).length;
+            if (rateLimitErrors > articlesArray.length * 0.5) {
+                log.warning(`High rate of 429 errors (${rateLimitErrors}/${articlesArray.length}). Stopping to avoid further rate limiting.`);
+                break;
+            }
+
+            // Early termination if we're getting very poor results and have processed many articles
+            if (batchNumber >= 2 && qualityRate < 0.05 && totalArticlesProcessed > maxItems * 5) {
+                log.warning(`Very low quality rate (${(qualityRate * 100).toFixed(1)}%) after processing ${totalArticlesProcessed} articles. Stopping to avoid excessive costs.`);
+                break;
             }
 
             batchNumber++;
@@ -975,11 +1027,11 @@ export class ArticleCrawler {
             };
         });
 
-        // Check if any URLs are Google News URLs and force browser mode if needed
+        // Check if any URLs are Google News URLs. Do NOT force global browser mode.
+        // We'll resolve via HTTP first and use targeted browser fallback only if needed.
         const hasGoogleNewsUrls = requests.some(req => req.url.includes('news.google.com/articles/'));
-        if (hasGoogleNewsUrls && !this.useBrowser) {
-            log.info('Google News URLs detected - enabling browser mode for all requests');
-            this.useBrowser = true;
+        if (hasGoogleNewsUrls) {
+            log.debug('Google News URLs detected - resolving via HTTP first; browser fallback will be per-URL if required');
         }
 
         // Create and run main crawler

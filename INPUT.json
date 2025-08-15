@@ -1,9 +1,10 @@
 {
-  "query": "artificial intelligence",
+  "query": "OpenAI",
   "region": "US",
   "language": "en-US",
-  "maxItems": 3,
+  "maxItems": 2,
   "useBrowser": false,
   "lightweightMode": true,
-  "costOptimized": true
+  "costOptimized": true,
+  "disableProxies": true
 }
