@@ -1,10 +1,12 @@
 {
-  "query": "OpenAI",
+  "query": "technology news",
   "region": "US",
   "language": "en-US",
   "maxItems": 2,
-  "useBrowser": false,
-  "lightweightMode": true,
-  "costOptimized": true,
-  "disableProxies": true
+  "useBrowser": true,
+  "testUrls": [
+    "https://www.bbc.com/news/technology",
+    "https://techcrunch.com/2024/12/20/openai-launches-sora-its-video-generation-model/",
+    "https://www.theverge.com/2024/12/20/24325806/google-gemini-2-0-flash-thinking-model-ai"
+  ]
 }

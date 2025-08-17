@@ -147,8 +147,8 @@ export const CONFIG = {
         BROWSER_DETECTION_ENABLED: !IS_DEVELOPMENT, // Disable in dev
 
         // Content extraction optimization
-        SINGLE_EXTRACTION_STRATEGY: IS_DEVELOPMENT, // Use single strategy in dev
-        SKIP_CONTENT_VALIDATION: IS_DEVELOPMENT,
+        SINGLE_EXTRACTION_STRATEGY: false, // Try all strategies to improve robustness
+        SKIP_CONTENT_VALIDATION: false, // Always validate content quality
 
         // Resource limits
         MAX_MEMORY_USAGE_MB: IS_DEVELOPMENT ? 256 : 512,
@@ -158,6 +158,42 @@ export const CONFIG = {
         ENABLE_COST_TRACKING: IS_PRODUCTION,
         COST_ALERT_THRESHOLD: 0.50,
     },
+
+	    // Consent handling configuration
+	    CONSENT_HANDLING: {
+	        WAIT_AFTER_CLICK_MS: 1000,
+	        GENERIC_SELECTORS: [
+	            '#onetrust-accept-btn-handler',
+	            'button#onetrust-accept-btn-handler',
+	            'button[aria-label*="accept" i]',
+	            'button[aria-label*="agree" i]',
+	            'button:has-text("Accept")',
+	            'button:has-text("I agree")',
+	            'button:has-text("Agree")',
+	            'button:has-text("OK")',
+	            '.fc-cta-consent',
+	            '.js-consent-banner .accept',
+	            'button[class*="accept"]',
+	        ],
+	        DOMAIN_SELECTORS: {
+	            'www.malaymail.com': [
+	                '#onetrust-accept-btn-handler',
+	                'button:has-text("Accept")',
+	                'button:has-text("I agree")'
+	            ],
+	            'www.bbc.com': [
+	                'button#bbccookies-continue-button',
+	                'button:has-text("Yes, I agree")'
+	            ],
+	            'www.reuters.com': [
+	                'button#onetrust-accept-btn-handler'
+	            ],
+	            'edition.cnn.com': [
+	                'button:has-text("I Agree")',
+	                '#onetrust-accept-btn-handler'
+	            ]
+	        }
+	    },
 
     // Development-specific settings
     DEVELOPMENT: IS_DEVELOPMENT ? {

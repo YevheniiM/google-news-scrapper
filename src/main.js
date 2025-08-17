@@ -62,18 +62,18 @@ async function main() {
         disableProxies = false,
     } = input;
 
-    // Apply cost optimization settings
-    if (lightweightMode || costOptimized) {
+    // Apply cost optimization settings (also allow via ENV for CLI schema compatibility)
+    const FORCE_COST_OPT = process.env.COST_OPTIMIZED === 'true';
+    const FORCE_LIGHTWEIGHT = process.env.LIGHTWEIGHT_MODE === 'true';
+    if (lightweightMode || costOptimized || FORCE_COST_OPT || FORCE_LIGHTWEIGHT) {
         log.info('🚀 Running in cost-optimized mode');
-        if (lightweightMode) {
-            CONFIG.CRAWLER.MAX_CONCURRENCY = 1;
-            CONFIG.PROXY.RESIDENTIAL_ENABLED = false;
-            CONFIG.IMAGE.SKIP_VALIDATION = true;
-        }
+        CONFIG.CRAWLER.MAX_CONCURRENCY = 1;
+        CONFIG.PROXY.RESIDENTIAL_ENABLED = false;
+        CONFIG.IMAGE.SKIP_VALIDATION = true;
     }
 
     // Optional: disable proxies entirely for local testing
-    if (disableProxies) {
+    if (disableProxies || process.env.DISABLE_PROXIES === 'true') {
         log.warning('🧪 Local testing: proxies are disabled');
         CONFIG.PROXY.RESIDENTIAL_ENABLED = false;
     }
@@ -94,6 +94,22 @@ async function main() {
     // Stage B: Article Crawling with Quality-Based Continuation
     log.info('=== Stage B: Article Crawling with Smart maxItems Handling ===');
     const articleCrawler = new ArticleCrawler(articleProxy, useBrowser);
+
+    // If explicit testUrls provided, bypass RSS and crawl them directly (cost-optimized testing)
+    if (Array.isArray(input.testUrls) && input.testUrls.length > 0) {
+        log.info(`Test mode: crawling ${input.testUrls.length} direct URLs`);
+        const rssItems = input.testUrls.map((u, i) => ({
+            title: `Test URL ${i+1}`,
+            link: u,
+            pubDate: new Date().toISOString(),
+            source: new URL(u).hostname,
+            description: '',
+            guid: u,
+        }));
+        await articleCrawler.crawlArticles(rssItems, query, maxItems || rssItems.length);
+        // Prepare final stats consistent with normal flow
+        return;
+    }
 
     // Implement smart maxItems handling - continue until we get enough quality articles
     const crawlResults = await articleCrawler.crawlWithQualityTarget({

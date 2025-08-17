@@ -42,11 +42,14 @@ export class RssFetcher {
 
     /**
      * Reset the articles collection for a new crawling session
+     * @param {boolean} keepReturnedArticles - If true, don't clear returnedArticles to avoid duplicates across batches
      */
-    resetArticles() {
+    resetArticles(keepReturnedArticles = false) {
         this.articles.clear();
-        this.returnedArticles.clear();
-        log.info('RSS articles collection reset for new session');
+        if (!keepReturnedArticles) {
+            this.returnedArticles.clear();
+        }
+        log.info(`RSS articles collection reset for new session${keepReturnedArticles ? ' (keeping returned articles tracking)' : ''}`);
     }
 
     /**
@@ -163,13 +166,17 @@ export class RssFetcher {
 
         log.info(`Initial fetch: ${newItemsCount} new items, total: ${this.articles.size}`);
 
-        // If we need more articles and haven't reached the limit, try alternative strategies
-        if (maxItems > 0 && this.articles.size < maxItems) {
-            const articlesNeeded = maxItems - this.articles.size;
-            log.info(`Need ${articlesNeeded} more articles (${this.articles.size}/${maxItems}), trying alternative strategies...`);
+        // If we need more articles, try alternative strategies
+        // Also try alternatives if we have returnedArticles (meaning this is a subsequent batch)
+        const needsMoreArticles = maxItems > 0 && this.articles.size < maxItems;
+        const isSubsequentBatch = this.returnedArticles.size > 0;
 
-            // For small targets, be more conservative with alternative strategies
-            const shouldTryAlternatives = maxItems > 5 || this.articles.size === 0;
+        if (needsMoreArticles || isSubsequentBatch) {
+            const articlesNeeded = maxItems > 0 ? maxItems - this.articles.size : maxItems;
+            log.info(`Need ${articlesNeeded} more articles (${this.articles.size}/${maxItems || 'unlimited'}), trying alternative strategies...`);
+
+            // For subsequent batches or small targets, be more aggressive with alternative strategies
+            const shouldTryAlternatives = maxItems > 5 || this.articles.size === 0 || isSubsequentBatch;
 
             if (shouldTryAlternatives) {
                 // Strategy 1: Try multiple RSS endpoints and variations
@@ -194,10 +201,18 @@ export class RssFetcher {
 
         // Return only articles that haven't been returned before
         const newArticlesMap = new Map();
+        let returnedCount = 0;
+
         for (const [guid, article] of this.articles) {
             if (!this.returnedArticles.has(guid)) {
                 newArticlesMap.set(guid, article);
                 this.returnedArticles.add(guid);
+                returnedCount++;
+
+                // If maxItems is specified and we've reached it, stop adding more
+                if (maxItems > 0 && returnedCount >= maxItems) {
+                    break;
+                }
             }
         }
 

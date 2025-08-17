@@ -1,0 +1,13 @@
+{
+  "query": "test",
+  "region": "US",
+  "language": "en-US",
+  "maxItems": 4,
+  "useBrowser": false,
+  "testUrls": [
+    "https://www.bbc.com/news/technology-68901234",
+    "https://www.reuters.com/world/",
+    "https://edition.cnn.com/tech",
+    "https://www.malaymail.com/news/malaysia"
+  ]
+}

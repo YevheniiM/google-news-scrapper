@@ -186,6 +186,8 @@ export class ArticleCrawler {
                             headless: true,
                         },
                     },
+
+
                 });
             } else {
                 log.info('Using CheerioCrawler for HTML parsing');
@@ -201,6 +203,31 @@ export class ArticleCrawler {
             });
         }
     }
+
+	    // Browser consent auto-accept helper (class method)
+	    async acceptConsentIfPresent(page, urlForDomain) {
+	        if (!page) return false;
+	        try {
+	            const domain = new URL(urlForDomain || page.url()).hostname;
+	            const selectors = [
+	                ...(CONFIG.CONSENT_HANDLING.DOMAIN_SELECTORS[domain] || []),
+	                ...CONFIG.CONSENT_HANDLING.GENERIC_SELECTORS,
+	            ];
+	            for (const sel of selectors) {
+	                try {
+	                    const locator = page.locator(sel);
+	                    const count = await locator.count();
+	                    if (count > 0) {
+	                        await locator.first().click({ timeout: 2000 }).catch(() => {});
+	                        await page.waitForTimeout(CONFIG.CONSENT_HANDLING.WAIT_AFTER_CLICK_MS);
+	                        log.info(`Clicked consent using selector: ${sel}`);
+	                        return true;
+	                    }
+	                } catch {}
+	            }
+	        } catch {}
+	        return false;
+	    }
 
     /**
      * Handle article request and extract content
@@ -261,6 +288,8 @@ export class ArticleCrawler {
                             retry: { limit: CONFIG.CRAWLER.RETRY_ATTEMPTS },
                             headers: {
                                 'User-Agent': CONFIG.CRAWLER.DEFAULT_USER_AGENT,
+
+
                                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                                 'Accept-Language': 'en-US,en;q=0.5',
                                 'Accept-Encoding': 'gzip, deflate',
@@ -290,6 +319,7 @@ export class ArticleCrawler {
                 }
             }
 
+
             // STEP 3: Check for consent pages or blocks (but don't skip, try to extract anyway)
             let hasConsentPage = false;
             if (this.sessionManager.isConsentPage(htmlContent, finalUrl)) {
@@ -303,6 +333,24 @@ export class ArticleCrawler {
             costMonitor.trackContentExtraction(extractionType);
 
             const extractedContent = this.contentExtractor.extractContent(htmlContent, finalUrl);
+
+
+	            // DEFER BROWSER FALLBACK: Mark for later batch processing instead of inline
+	            if ((!extractedContent.success || hasConsentPage) && !this.useBrowser) {
+	                // Add to failed URLs for later browser fallback processing
+	                this.failedUrls.push({
+	                    url: finalUrl,
+	                    error: hasConsentPage ? 'Browser mode required - consent page detected' : 'Browser mode required - static extraction failed',
+	                    timestamp: new Date().toISOString(),
+	                    userData: userData
+	                });
+
+	                log.info(`Static extraction ${extractedContent.success ? 'succeeded but consent detected' : 'failed'} — marking for browser fallback: ${finalUrl}`);
+
+	                // Skip this article for now - it will be processed in browser fallback
+	                this.stats.skipped.consentPageDetected++;
+	                return;
+	            }
 
             // STEP 5: Apply "All or Nothing" validation
             if (!extractedContent.success) {
@@ -329,24 +377,22 @@ export class ArticleCrawler {
                 return; // Skip this article entirely
             }
 
-            // STEP 5.3: Images requirement - BALANCED approach (prefer articles with images but don't require them)
+            // STEP 5.3: Images requirement - STRICT 'all or nothing' (must have images)
             if (!extractedContent.images || extractedContent.images.length === 0) {
-                log.warning(`No images found for ${finalUrl} - proceeding without images`);
-                extractedContent.images = []; // Ensure it's an empty array
-                // Continue processing - don't skip the article
+                log.warning(`No images found for ${finalUrl}`);
+                log.info(`SKIPPING ARTICLE - No images found (all-or-nothing policy)`);
+                this.stats.skipped.noImages++;
+                return; // Skip this article entirely
             }
 
-            // STEP 6: Validate images (RELAXED for local testing - don't require images to pass validation)
-            let workingImages = [];
-            if (extractedContent.images && extractedContent.images.length > 0) {
-                workingImages = await this.validateImages(extractedContent.images);
+            // STEP 6: Validate images - must have at least 1 working image
+            let workingImages = await this.validateImages(extractedContent.images);
 
-                if (workingImages.length === 0) {
-                    // RELAXED: If no images pass validation, continue with empty images array
-                    log.warning(`No images passed validation for ${finalUrl} - continuing without images`);
-                    workingImages = []; // Continue with empty images
-                    // Don't skip the article - this is too strict for local testing
-                }
+            if (!workingImages || workingImages.length === 0) {
+                log.warning(`No images passed validation for ${finalUrl}`);
+                log.info(`SKIPPING ARTICLE - Image validation failed (all-or-nothing policy)`);
+                this.stats.skipped.imageValidationFailed++;
+                return; // Skip this article entirely
             }
 
             log.info(`✅ Article passed quality checks: ${extractedContent.text.length} chars, ${workingImages.length} images`);
@@ -401,25 +447,15 @@ export class ArticleCrawler {
                 return;
             }
 
-            // Increment saved counter immediately to prevent race conditions
-            if (this.currentMaxItemsLimit) {
-                this.stats.saved++;
-                // Double-check after incrementing to handle race conditions
-                if (this.stats.saved > this.currentMaxItemsLimit) {
-                    log.info(`✋ LIMIT EXCEEDED: Saved ${this.stats.saved} articles (limit: ${this.currentMaxItemsLimit})`);
-                    log.info(`   Reverting and skipping article: ${record.title}`);
-                    this.stats.saved--; // Revert the increment
-                    this.stats.skipped.maxItemsReached = (this.stats.skipped.maxItemsReached || 0) + 1;
-                    return;
-                }
-            }
-
             // STEP 10: Save the high-quality article
-            await Dataset.pushData(record);
-            // Note: stats.saved is already incremented in the limit check above for maxItems scenarios
-            if (!this.currentMaxItemsLimit) {
-                this.stats.saved++;
+            try {
+                await Dataset.pushData(record);
+                log.debug(`Dataset.pushData completed successfully for: ${record.title}`);
+            } catch (error) {
+                log.error(`Dataset.pushData failed: ${error.message}`);
+                throw error;
             }
+            this.stats.saved++;
             costMonitor.trackArticleProcessing(true); // Track successful processing
 
             log.info(`✅ SUCCESS: Saved high-quality article (${this.stats.saved}/${this.stats.processed})`);
@@ -735,6 +771,7 @@ export class ArticleCrawler {
             error: errorMessage,
             retryCount: request.retryCount,
             timestamp: new Date().toISOString(),
+            userData: request.userData || {}, // Preserve userData for better matching
         });
 
         // Store failed URLs periodically
@@ -815,6 +852,7 @@ export class ArticleCrawler {
         if (requests.length === 0) return;
 
         log.info(`Running browser fallback for ${requests.length} requests`);
+        log.debug('Browser fallback request URLs:', requests.map(r => r.url));
 
         // Temporarily switch to browser mode
         const originalUseBrowser = this.useBrowser;
@@ -822,7 +860,32 @@ export class ArticleCrawler {
 
         try {
             const browserCrawler = this.createCrawler();
-            await browserCrawler.run(requests);
+            log.debug(`Created browser crawler: ${browserCrawler.constructor.name}`);
+
+            // Add detailed request debugging
+            log.debug(`About to run browser crawler with ${requests.length} requests`);
+            log.debug('Request details:', requests.map(r => ({ url: r.url, userData: r.userData })));
+
+            // Validate request format
+            const validRequests = requests.filter(req => req && req.url);
+            log.debug(`Valid requests: ${validRequests.length}/${requests.length}`);
+
+            if (validRequests.length === 0) {
+                log.warning('No valid requests found for browser fallback');
+                return;
+            }
+
+            // Run the crawler with requests directly
+            await browserCrawler.run(validRequests);
+
+            // Ensure all async operations complete
+            await sleep(500);
+
+            log.debug(`Browser fallback completed for ${requests.length} requests`);
+        } catch (error) {
+            log.error(`Browser fallback error: ${error.message}`);
+            log.error(`Browser fallback error stack: ${error.stack}`);
+            throw error;
         } finally {
             // Restore original setting
             this.useBrowser = originalUseBrowser;
@@ -868,8 +931,8 @@ export class ArticleCrawler {
 
         log.info(`Starting quality-targeted crawling for ${maxItems} complete articles`);
 
-        // Reset RSS fetcher for new session
-        rssFetcher.resetArticles();
+        // Reset RSS fetcher for new session - but keep returnedArticles to avoid duplicates across batches
+        rssFetcher.resetArticles(true);
 
         let qualityArticlesSaved = 0;
         let totalArticlesProcessed = 0;
@@ -936,21 +999,19 @@ export class ArticleCrawler {
                 break;
             }
 
-            // Track stats before processing this batch
-            const statsBefore = { ...this.stats };
-
             // Calculate how many more articles we need
             const articlesNeeded = maxItems - qualityArticlesSaved;
 
-            // Process this batch with maxItems limit
-            await this.crawlArticles(articlesArray, query, articlesNeeded);
+            // Process this batch with maxItems limit and get exact number of saved articles (includes browser fallback)
+            log.info(`🔄 Starting batch ${batchNumber} processing (including any browser fallback)...`);
+            const qualityArticlesFromBatch = await this.crawlArticles(articlesArray, query, articlesNeeded);
 
-            // Calculate how many quality articles we got from this batch
-            const qualityArticlesFromBatch = this.stats.saved - statsBefore.saved;
+            // Update counters using the definitive per-call result
             qualityArticlesSaved += qualityArticlesFromBatch;
             totalArticlesProcessed += articlesArray.length;
 
-            log.info(`Batch ${batchNumber} results: ${qualityArticlesFromBatch} quality articles saved (${qualityArticlesSaved}/${maxItems} total)`);
+            // Log batch results AFTER all processing (including browser fallback) is complete
+            log.info(`✅ Batch ${batchNumber} completed: ${qualityArticlesFromBatch} quality articles saved (${qualityArticlesSaved}/${maxItems} total)`);
 
             // If we have enough quality articles, we're done
             if (qualityArticlesSaved >= maxItems) {
@@ -965,7 +1026,12 @@ export class ArticleCrawler {
             // Check for rate limiting issues (429 errors)
             const rateLimitErrors = this.failedUrls.filter(f => f.error && f.error.includes('429')).length;
             if (rateLimitErrors > articlesArray.length * 0.5) {
-                log.warning(`High rate of 429 errors (${rateLimitErrors}/${articlesArray.length}). Stopping to avoid further rate limiting.`);
+                log.warning(`High rate of 429 errors (${rateLimitErrors}/${articlesArray.length}). Google News is rate limiting our requests.`);
+                log.info('💡 RATE LIMITING DETECTED - This is a temporary issue. Solutions:');
+                log.info('   1. Wait 10-30 minutes before running again');
+                log.info('   2. Try a different query or region');
+                log.info('   3. Use testUrls with direct article URLs instead of Google News');
+                log.info('   4. This is normal during development/testing - not a code issue');
                 break;
             }
 
@@ -982,7 +1048,13 @@ export class ArticleCrawler {
         }
 
         if (qualityArticlesSaved < maxItems) {
-            log.warning(`Could not reach target of ${maxItems} articles. Got ${qualityArticlesSaved} quality articles from ${totalArticlesProcessed} total articles processed.`);
+            const rateLimitErrors = this.failedUrls.filter(f => f.error && f.error.includes('429')).length;
+            if (rateLimitErrors > 0) {
+                log.warning(`Could not reach target due to rate limiting. Got ${qualityArticlesSaved} quality articles from ${totalArticlesProcessed} total articles processed.`);
+                log.info('🔄 RATE LIMITING SOLUTION: Try again in 10-30 minutes or use direct article URLs in testUrls');
+            } else {
+                log.warning(`Could not reach target of ${maxItems} articles. Got ${qualityArticlesSaved} quality articles from ${totalArticlesProcessed} total articles processed.`);
+            }
         }
 
         log.info(`Quality-targeted crawling completed: ${qualityArticlesSaved}/${maxItems} target articles saved`);
@@ -1000,15 +1072,18 @@ export class ArticleCrawler {
      * @param {Array} rssItems - Array of RSS items
      * @param {string} query - Original search query
      * @param {number} maxItemsLimit - Maximum number of articles to save (optional)
-     * @returns {Promise<void>}
+     * @returns {Promise<number>} Number of successfully saved high-quality articles in this call
      */
     async crawlArticles(rssItems, query, maxItemsLimit = null) {
         if (!rssItems || rssItems.length === 0) {
             log.warning('No RSS items to crawl');
-            return;
+            return 0;
         }
 
         log.info(`Starting article crawling for ${rssItems.length} articles${maxItemsLimit ? ` (limit: ${maxItemsLimit})` : ''}`);
+
+        // Track saved count at start of this call to compute per-call savings precisely
+        const savedAtStart = this.stats.saved;
 
         // Store the maxItemsLimit in the instance for use in handleRequest
         this.currentMaxItemsLimit = maxItemsLimit;
@@ -1036,8 +1111,11 @@ export class ArticleCrawler {
 
         // Create and run main crawler
         const crawler = this.createCrawler();
+        log.info(`🚀 Starting main crawler for ${requests.length} articles...`);
+
         try {
             await crawler.run(requests);
+            log.info(`📊 Main crawler completed: ${this.stats.saved - savedAtStart} articles saved from initial processing`);
         } catch (error) {
             // Handle the special MAX_ITEMS_REACHED signal
             if (error.message === 'MAX_ITEMS_REACHED') {
@@ -1054,17 +1132,63 @@ export class ArticleCrawler {
             .filter(failedUrl =>
                 failedUrl.error &&
                 (failedUrl.error.includes('Browser mode required') ||
-                 failedUrl.error.includes('retrying with PlaywrightCrawler'))
+                 failedUrl.error.includes('retrying with PlaywrightCrawler') ||
+                 failedUrl.error.includes('429') ||  // Rate limiting - try browser mode
+                 failedUrl.error.includes('Request blocked') ||  // Blocked requests
+                 failedUrl.error.includes('Access denied') ||  // Access issues
+                 failedUrl.error.includes('Cloudflare'))  // Cloudflare protection
             )
-            .map(failedUrl => ({
-                url: failedUrl.url,
-                userData: requests.find(req => req.url === failedUrl.url)?.userData || {},
-            }));
+            .map(failedUrl => {
+                // Find the original request by URL (exact match first, then try to find by any URL field)
+                let originalRequest = requests.find(req => req.url === failedUrl.url);
+
+                // If not found, it might be because failedUrl contains a resolved URL
+                // Try to find by userData if available
+                if (!originalRequest && failedUrl.userData) {
+                    originalRequest = requests.find(req =>
+                        req.userData &&
+                        (req.userData.originalGoogleUrl === failedUrl.userData.originalGoogleUrl ||
+                         req.userData.link === failedUrl.userData.link)
+                    );
+                }
+
+                return {
+                    url: failedUrl.url,
+                    userData: originalRequest?.userData || failedUrl.userData || {},
+                };
+            });
 
         if (browserFallbackRequests.length > 0) {
-            log.info(`Running browser mode fallback for ${browserFallbackRequests.length} failed requests`);
+            log.info(`🔄 Running browser mode fallback for ${browserFallbackRequests.length} failed requests`);
             log.debug('Browser fallback requests:', browserFallbackRequests.map(req => req.url));
-            await this.runBrowserFallback(browserFallbackRequests);
+
+            // Add delay before browser fallback to help with rate limiting
+            const rateLimitErrors = this.failedUrls.filter(f => f.error && f.error.includes('429')).length;
+            if (rateLimitErrors > 0) {
+                log.info(`Detected ${rateLimitErrors} rate limit errors. Adding 5-second delay before browser fallback...`);
+                await sleep(5000);
+            }
+
+            // Track saves before browser fallback
+            const savedBeforeFallback = this.stats.saved;
+
+            try {
+                await this.runBrowserFallback(browserFallbackRequests);
+
+                // Ensure browser fallback has fully completed by adding a small delay
+                await sleep(1000);
+
+                // Log browser fallback results
+                const savedFromFallback = this.stats.saved - savedBeforeFallback;
+                if (savedFromFallback > 0) {
+                    log.info(`✅ Browser fallback completed: ${savedFromFallback} additional articles saved`);
+                } else {
+                    log.info(`⚠️ Browser fallback completed: no additional articles saved`);
+                }
+            } catch (error) {
+                log.error(`Browser fallback failed: ${error.message}`);
+                // Continue with the process even if browser fallback fails
+            }
         }
 
         // Store failed URLs
@@ -1080,6 +1204,10 @@ export class ArticleCrawler {
 
         // Cleanup resources
         await this.cleanup();
+
+        // Return number of saved items during this call (includes any browser fallback saves)
+        const savedThisCall = this.stats.saved - savedAtStart;
+        return savedThisCall;
     }
 
     /**
@@ -1087,14 +1215,19 @@ export class ArticleCrawler {
      */
     printFinalStatistics() {
         const totalSkipped = Object.values(this.stats.skipped).reduce((sum, count) => sum + count, 0);
+        const totalAttempted = this.stats.processed + (this.stats.failed || 0) + totalSkipped;
         const successRate = this.stats.processed > 0 ? (this.stats.saved / this.stats.processed * 100).toFixed(1) : 0;
+        const overallRate = totalAttempted > 0 ? (this.stats.saved / totalAttempted * 100).toFixed(1) : 0;
 
         log.info('\n' + '='.repeat(60));
         log.info('📊 FINAL EXTRACTION STATISTICS');
         log.info('='.repeat(60));
-        log.info(`Total articles processed: ${this.stats.processed}`);
-        log.info(`Successfully saved: ${this.stats.saved} (${successRate}%)`);
-        log.info(`Total skipped: ${totalSkipped} (${(100 - successRate).toFixed(1)}%)`);
+        log.info(`🔍 Total articles attempted: ${totalAttempted}`);
+        log.info(`📊 Articles processed: ${this.stats.processed}`);
+        log.info(`✅ Successfully saved: ${this.stats.saved} (${successRate}% of processed)`);
+        log.info(`❌ Failed to process: ${this.stats.failed || 0}`);
+        log.info(`⏭️ Skipped (quality issues): ${totalSkipped}`);
+        log.info(`🎯 Overall success rate: ${overallRate}% (saved/attempted)`);
         log.info('');
         log.info('📋 SKIP REASONS:');
         log.info(`  • URL resolution failed: ${this.stats.skipped.urlResolutionFailed}`);

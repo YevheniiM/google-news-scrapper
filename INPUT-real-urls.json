@@ -1,0 +1,13 @@
+{
+  "query": "test",
+  "region": "US",
+  "language": "en-US",
+  "maxItems": 4,
+  "useBrowser": false,
+  "testUrls": [
+    "https://www.bbc.com/news/articles/c4ng5n8l8ngo",
+    "https://www.reuters.com/technology/artificial-intelligence/",
+    "https://edition.cnn.com/2024/12/30/tech/ai-predictions-2025/index.html",
+    "https://www.malaymail.com/news/malaysia/2024/12/30/malaysia-to-launch-national-ai-roadmap-in-2025/150234"
+  ]
+}

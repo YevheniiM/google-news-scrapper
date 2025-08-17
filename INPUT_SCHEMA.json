@@ -106,6 +106,13 @@
       "default": false,
       "example": false,
       "editor": "checkbox"
+    },
+    "testUrls": {
+      "title": "Direct Test URLs",
+      "type": "array",
+      "description": "Optional: crawl these exact article URLs instead of fetching from Google News RSS. Useful for testing specific sites.",
+      "items": { "type": "string", "format": "uri" },
+      "default": []
     }
   },
   "required": ["query"],

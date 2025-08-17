@@ -190,7 +190,7 @@ export function extractImages(extractedContent, $ = null, baseUrl = null) {
         }
 
         // Add Open Graph images (usually featured images)
-        $('meta[property="og:image"], meta[property="og:image:url"]').each((_, element) => {
+        $('meta[property="og:image"], meta[property="og:image:url"], meta[property="og:image:secure_url"]').each((_, element) => {
             const content = $(element).attr('content');
             if (content) {
                 addImage(content, 'og-featured');
