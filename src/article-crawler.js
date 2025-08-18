@@ -238,6 +238,11 @@ export class ArticleCrawler {
         const { userData } = request;
 
         try {
+            // Fast guard: if we've already reached the per-call limit, stop immediately to avoid inflating skip stats
+            if (this.currentMaxItemsLimit && this.stats.saved >= this.currentMaxItemsLimit) {
+                throw new Error('MAX_ITEMS_REACHED');
+            }
+
             this.stats.processed++;
             log.info(`Processing article ${this.stats.processed}: ${request.url}`);
 
@@ -277,6 +282,8 @@ export class ArticleCrawler {
                         // Use browser to fetch content (handles JavaScript)
                         costMonitor.trackBrowserRequest();
                         await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                        // Try to auto-accept consent if present before reading content
+                        await this.acceptConsentIfPresent(page, finalUrl);
                         htmlContent = await page.content();
                     } else {
                         // Use HTTP request with unified proxy strategy
@@ -875,8 +882,11 @@ export class ArticleCrawler {
                 return;
             }
 
-            // Run the crawler with requests directly
-            await browserCrawler.run(validRequests);
+            // Add requests directly to crawler and run
+            await browserCrawler.addRequests(validRequests.map(r => ({ url: r.url, userData: r.userData || {} })));
+
+            // Run the crawler
+            await browserCrawler.run();
 
             // Ensure all async operations complete
             await sleep(500);

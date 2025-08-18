@@ -89,8 +89,8 @@ export class ContentExtractor {
             const reader = new Readability(document, {
                 debug: false,
                 maxElemsToParse: 0, // No limit
-                nbTopCandidates: 5,
-                charThreshold: 500,
+                nbTopCandidates: 7,
+                charThreshold: 300,
                 classesToPreserve: ['caption', 'credit']
             });
 
@@ -108,7 +108,8 @@ export class ContentExtractor {
             const publishDate = this.extractPublishDate($);
             const images = this.extractAllImages($, article.content, url);
 
-            const success = !!(article.title && cleanedText.length > 300 && this.isReadableText(cleanedText));
+            // Slightly relax success threshold to improve extraction rate while keeping quality checks later
+            const success = !!(article.title && cleanedText.length > 250 && this.isReadableText(cleanedText));
 
             return {
                 title: cleanText(article.title || ''),
@@ -228,7 +229,7 @@ export class ContentExtractor {
 
             // Post-process the extracted text
             const cleanedText = this.postProcessText(mainContentText);
-            const success = !!(cleanedText.length > 300 && this.isReadableText(cleanedText));
+            const success = !!(cleanedText.length > 250 && this.isReadableText(cleanedText));
 
             return {
                 title: cleanText(this.extractTitle($)),
@@ -293,7 +294,7 @@ export class ContentExtractor {
 
             // Post-process the extracted text
             const cleanedText = this.postProcessText(text);
-            const success = !!(title && cleanedText.length > 300 && this.isReadableText(cleanedText));
+            const success = !!(title && cleanedText.length > 250 && this.isReadableText(cleanedText));
 
             return {
                 title: cleanText(title || ''),
@@ -355,7 +356,7 @@ export class ContentExtractor {
 
             // Post-process the extracted text
             const cleanedText = this.postProcessText(largestTextBlock);
-            const success = !!((title && cleanedText.length > 300) && this.isReadableText(cleanedText));
+            const success = !!((title && cleanedText.length > 250) && this.isReadableText(cleanedText));
 
             return {
                 title: cleanText(title),
@@ -615,15 +616,19 @@ export class ContentExtractor {
         if (content) {
             const $content = cheerio.load(content);
             $content('img').each((_, img) => {
-                const src = $(img).attr('src') || $(img).attr('data-src') || $(img).attr('data-lazy-src') || $(img).attr('srcset');
+                let src = $(img).attr('src') || $(img).attr('data-src') || $(img).attr('data-lazy-src') || $(img).attr('srcset');
                 const alt = $(img).attr('alt') || '';
 
-                if (src && !images.some(i => i.url === src)) {
-                    images.push({
-                        url: Array.isArray(src) ? src[0] : src,
-                        alt,
-                        type: 'content'
-                    });
+                if (src) {
+                    // If srcset, take the first URL
+                    if (src.includes(',')) src = src.split(',')[0].trim().split(' ')[0];
+                    if (!images.some(i => i.url === src)) {
+                        images.push({
+                            url: Array.isArray(src) ? src[0] : src,
+                            alt,
+                            type: 'content'
+                        });
+                    }
                 }
             });
         }

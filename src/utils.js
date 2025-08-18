@@ -360,32 +360,37 @@ export function validateImageUrlByPattern(imageUrl) {
         return false;
     }
 
+    // Expand validation to handle srcset and data URLs gracefully
+    const urlLower = imageUrl.toLowerCase();
+
+    // If it's a srcset, take the first URL part before space
+    const firstPart = urlLower.split(',')[0].trim();
+    const firstUrl = firstPart.split(' ')[0];
+
+    // Must be HTTP/HTTPS URL (allow protocol-relative)
+    const normalized = firstUrl.startsWith('//') ? `https:${firstUrl}` : firstUrl;
+    if (!normalized.startsWith('http')) return false;
+
     // Check for valid image extensions
     const validExtensions = CONFIG.IMAGE.ALLOWED_EXTENSIONS;
-    const hasValidExtension = validExtensions.some(ext =>
-        imageUrl.toLowerCase().includes(ext)
-    );
+    const hasValidExtension = validExtensions.some(ext => normalized.includes(ext));
 
     // Skip obvious non-images
     const invalidPatterns = [
-        '1x1', 'pixel', 'spacer', 'blank', 'transparent',
-        'tracking', 'analytics', 'beacon', 'counter'
+        '1x1', 'pixel', 'spacer', 'blank', 'transparent', 'sprite',
+        'tracking', 'analytics', 'beacon', 'counter', 'placeholder'
     ];
 
-    const hasInvalidPattern = invalidPatterns.some(pattern =>
-        imageUrl.toLowerCase().includes(pattern)
-    );
+    const hasInvalidPattern = invalidPatterns.some(pattern => normalized.includes(pattern));
 
     // Check for common image hosting domains (likely to be valid)
     const trustedDomains = [
         'imgur.com', 'cloudinary.com', 'amazonaws.com', 'googleusercontent.com',
         'fbcdn.net', 'twimg.com', 'ytimg.com', 'staticflickr.com',
-        'unsplash.com', 'pexels.com'
+        'unsplash.com', 'pexels.com', 'wp.com', 'akamaized.net', 'cdn', 'assets'
     ];
 
-    const isTrustedDomain = trustedDomains.some(domain =>
-        imageUrl.includes(domain)
-    );
+    const isTrustedDomain = trustedDomains.some(domain => normalized.includes(domain));
 
     // Return true if has valid extension OR is from trusted domain AND doesn't have invalid patterns
     return (hasValidExtension || isTrustedDomain) && !hasInvalidPattern;

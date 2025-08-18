@@ -80,7 +80,7 @@ export const CONFIG = {
     IMAGE: {
         VALIDATION_TIMEOUT: IS_DEVELOPMENT ? 2000 : 5000,
         MAX_CONCURRENT_VALIDATIONS: IS_DEVELOPMENT ? 1 : 2,
-        ALLOWED_EXTENSIONS: ['.jpg', '.jpeg', '.png', '.webp', '.gif'],
+        ALLOWED_EXTENSIONS: ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.svg'],
         MIN_SIZE: 100,
         SKIP_VALIDATION: IS_DEVELOPMENT, // Skip validation in dev for speed
     },
