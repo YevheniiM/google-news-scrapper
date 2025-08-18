@@ -3,5 +3,5 @@
   "region": "US",
   "language": "en-US",
   "maxItems": 3,
-  "useBrowser": false
+  "useBrowser": true
 }

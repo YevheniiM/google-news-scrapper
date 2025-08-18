@@ -20,7 +20,14 @@ export class GoogleNewsResolver {
         this.requestCount = 0;
         this.successCount = 0;
         this.lastRequestTime = 0;
-        this.minRequestInterval = options.minRequestInterval || 2000; // Minimum 2 seconds between requests for better success rate
+        this.minRequestInterval = options.minRequestInterval || 1000; // Reduced for cloud environment
+        this.isCloudEnvironment = this.detectCloudEnvironment();
+        this.cloudTimeoutMultiplier = this.isCloudEnvironment ? 0.5 : 1; // Shorter timeouts in cloud
+
+        // Cloud environment optimizations
+        this.maxRetries = this.isCloudEnvironment ? 3 : 5; // Fewer retries in cloud
+        this.baseTimeout = this.isCloudEnvironment ? 10000 : 20000; // Shorter base timeout in cloud
+        this.fallbackToDirectUrl = this.isCloudEnvironment; // Enable direct URL fallback in cloud
 
         // Caching and persistence options
         this.enablePersistence = options.enablePersistence !== false; // Default: true
@@ -39,6 +46,23 @@ export class GoogleNewsResolver {
                 this.saveCacheToDisk();
             }, 5 * 60 * 1000); // Save every 5 minutes
         }
+    }
+
+    /**
+     * Detect if running in cloud environment (Apify, AWS Lambda, etc.)
+     * @returns {boolean} True if in cloud environment
+     */
+    detectCloudEnvironment() {
+        return !!(
+            process.env.APIFY_ACTOR_ID ||
+            process.env.AWS_LAMBDA_FUNCTION_NAME ||
+            process.env.GOOGLE_CLOUD_PROJECT ||
+            process.env.AZURE_FUNCTIONS_WORKER_RUNTIME ||
+            process.env.VERCEL ||
+            process.env.NETLIFY ||
+            process.env.HEROKU_APP_NAME ||
+            process.env.NODE_ENV === 'production'
+        );
     }
 
     /**
@@ -69,6 +93,17 @@ export class GoogleNewsResolver {
             await this.enforceRateLimit();
 
             let resolvedUrl = googleNewsUrl;
+
+            // Cloud environment: Try direct URL fallback first if enabled
+            if (this.fallbackToDirectUrl) {
+                resolvedUrl = await this.tryDirectUrlFallback(googleNewsUrl);
+                if (resolvedUrl !== googleNewsUrl) {
+                    this.setCachedUrl(googleNewsUrl, resolvedUrl);
+                    this.successCount++;
+                    log.info(`✅ Resolved with direct URL fallback: ${resolvedUrl}`);
+                    return resolvedUrl;
+                }
+            }
 
             // Strategy 1: Try the proven batchexecute method (most reliable for new URLs)
             resolvedUrl = await this.resolveWithBatchExecute(googleNewsUrl);
@@ -323,7 +358,7 @@ export class GoogleNewsResolver {
      * @returns {Promise<string|null>} Decoded URL
      */
     async callBatchExecute(params) {
-        const maxRetries = 5; // Increased retries with residential proxies
+        const maxRetries = this.maxRetries; // Use environment-specific retry count
         let lastError = null;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -407,7 +442,7 @@ export class GoogleNewsResolver {
         const requestConfig = {
             url: 'https://news.google.com/_/DotsSplashUi/data/batchexecute',
             method: 'POST',
-            timeout: { request: 20000 }, // Increased timeout for production
+            timeout: { request: Math.floor(this.baseTimeout * this.cloudTimeoutMultiplier) }, // Dynamic timeout based on environment
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
                 'User-Agent': userAgent,
@@ -648,6 +683,55 @@ export class GoogleNewsResolver {
     }
 
     /**
+     * Try direct URL fallback for cloud environments
+     * @param {string} googleNewsUrl - Google News URL
+     * @returns {Promise<string>} Resolved URL or original URL
+     */
+    async tryDirectUrlFallback(googleNewsUrl) {
+        try {
+            log.debug('Attempting direct URL fallback for cloud environment');
+
+            // Extract article ID and try common URL patterns
+            const url = new URL(googleNewsUrl);
+            const pathParts = url.pathname.split('/');
+
+            if (pathParts.length < 2 || pathParts[pathParts.length - 2] !== 'articles') {
+                return googleNewsUrl;
+            }
+
+            const articleId = pathParts[pathParts.length - 1];
+
+            // Try to extract URL from common patterns in the article ID
+            const patterns = [
+                // Pattern 1: Look for encoded URLs in the ID
+                () => this.extractFromBase64Pattern(articleId),
+                // Pattern 2: Try URL-safe base64 decoding
+                () => this.extractFromUrlSafeBase64(articleId),
+                // Pattern 3: Look for direct URL hints in parameters
+                () => this.extractFromUrlParams(googleNewsUrl)
+            ];
+
+            for (const pattern of patterns) {
+                try {
+                    const result = pattern();
+                    if (result && result !== googleNewsUrl && !result.includes('google.com')) {
+                        log.debug(`Direct URL fallback succeeded: ${result}`);
+                        return result;
+                    }
+                } catch (error) {
+                    // Continue to next pattern
+                }
+            }
+
+            return googleNewsUrl;
+
+        } catch (error) {
+            log.debug('Direct URL fallback failed:', error.message);
+            return googleNewsUrl;
+        }
+    }
+
+    /**
      * Resolve URL by following HTTP redirects
      * @param {string} googleNewsUrl - Google News URL
      * @returns {Promise<string>} Resolved URL
@@ -756,6 +840,44 @@ export class GoogleNewsResolver {
         } catch (error) {
             log.debug('URL parameter extraction failed:', error.message);
             return googleNewsUrl;
+        }
+    }
+
+    /**
+     * Extract URL from base64 pattern in article ID
+     * @param {string} articleId - Article ID
+     * @returns {string|null} Extracted URL
+     */
+    extractFromBase64Pattern(articleId) {
+        try {
+            // Try standard base64 decoding
+            const decoded = Buffer.from(articleId, 'base64').toString('utf-8');
+            const urlMatch = decoded.match(/https?:\/\/[^\s"'<>]+/);
+            return urlMatch ? urlMatch[0] : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    /**
+     * Extract URL from URL parameters
+     * @param {string} googleNewsUrl - Google News URL
+     * @returns {string|null} Extracted URL
+     */
+    extractFromUrlParams(googleNewsUrl) {
+        try {
+            const url = new URL(googleNewsUrl);
+            // Look for common URL parameters that might contain the target URL
+            const params = ['url', 'u', 'link', 'target', 'redirect'];
+            for (const param of params) {
+                const value = url.searchParams.get(param);
+                if (value && value.startsWith('http') && !value.includes('google.com')) {
+                    return decodeURIComponent(value);
+                }
+            }
+            return null;
+        } catch (error) {
+            return null;
         }
     }
 
